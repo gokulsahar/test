@@ -1,0 +1,76 @@
+@echo off
+mkdir custom_components
+cd custom_components
+
+rem Create main directories
+mkdir core utils logs tests docs
+mkdir "tests\test_core" "tests\test_utils"
+
+rem Create component directories (simplified)
+mkdir components
+mkdir "components\salesforce_connector"
+mkdir "components\file_validator"
+
+rem Create test directories for components
+mkdir "tests\test_components"
+mkdir "tests\test_components\test_salesforce_connector"
+mkdir "tests\test_components\test_file_validator"
+
+rem Create main files
+echo. > runner.py
+echo. > requirements.txt
+echo. > setup.py
+echo. > README.md
+
+rem Create core files
+echo. > core\__init__.py
+echo. > core\context_manager.py
+echo. > core\logger.py
+
+rem Create utility files
+echo. > utils\__init__.py
+echo. > utils\file_utils.py
+echo. > utils\csv_utils.py
+echo. > utils\encryption_utils.py
+echo. > utils\common_utils.py
+
+rem Create salesforce connector files (simplified)
+echo. > components\__init__.py
+echo. > "components\salesforce_connector\__init__.py"
+echo. > "components\salesforce_connector\connector.py"
+echo. > "components\salesforce_connector\auth_module.py"
+echo. > "components\salesforce_connector\api_module.py"
+echo. > "components\salesforce_connector\data_mapper.py"
+echo. > "components\salesforce_connector\validation_schema.json"
+
+rem Create file validator files (simplified)
+echo. > "components\file_validator\__init__.py"
+echo. > "components\file_validator\validator.py"
+echo. > "components\file_validator\rules_engine.py"
+echo. > "components\file_validator\data_cleaner.py"
+echo. > "components\file_validator\validation_schema.json"
+
+rem Create log directory placeholder
+echo. > logs\.gitkeep
+
+rem Create test files
+echo. > tests\__init__.py
+echo. > tests\conftest.py
+echo. > "tests\test_core\__init__.py"
+echo. > "tests\test_core\test_context_manager.py"
+echo. > "tests\test_core\test_logger.py"
+echo. > "tests\test_utils\__init__.py"
+echo. > "tests\test_utils\test_common_utils.py"
+echo. > "tests\test_components\__init__.py"
+echo. > "tests\test_components\test_salesforce_connector\test_connector.py"
+echo. > "tests\test_components\test_salesforce_connector\test_auth_module.py"
+echo. > "tests\test_components\test_salesforce_connector\test_api_module.py"
+echo. > "tests\test_components\test_file_validator\test_validator.py"
+echo. > "tests\test_components\test_file_validator\test_rules_engine.py"
+
+rem Create documentation files
+echo. > docs\usage_guide.md
+echo. > docs\component_development.md
+
+echo Project structure created successfully!
+echo Run 'cd custom_components' to enter the project directory.

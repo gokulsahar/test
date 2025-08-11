@@ -1,0 +1,52 @@
+custom_components/
+├── runner.py                    # Main CLI entry point (Click-based)
+├── requirements.txt
+├── setup.py
+├── README.md
+├── components/
+│   ├── __init__.py
+│   ├── salesforce_connector/
+│   │   ├── __init__.py
+│   │   ├── connector.py         # Main component logic
+│   │   ├── data_mapper.py       # Field mapping logic
+│   │   └── validation_schema.json  # Context validation
+│   └── file_validator/
+│       ├── __init__.py
+│       ├── validator.py         # Main validation logic
+│       ├── rules_engine.py      # Validation rules
+│       ├── data_cleaner.py      # Data cleaning functions
+│       └── validation_schema.json  # Context validation
+├── core/
+│   ├── __init__.py
+│   ├── context_manager.py       # JSON context handling
+│   └── logger.py               # Centralized logging setup
+├── utils/
+│   ├── __init__.py
+│   ├── file_utils.py           # File operations
+│   ├── csv_utils.py            # CSV read/write helpers
+│   ├── encryption_utils.py     # Password encryption/decryption
+│   └── common_utils.py         # General utilities
+├── logs/
+│   └── .gitkeep
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_components/
+│   ├── test_core/
+│   └── test_utils/
+└── docs/
+    ├── usage_guide.md
+    └── component_development.md
+
+
+
+
+
+
+DataStage Job -> Saves data as csv → Execute Command Stage → Python CLI Runner → Context Manager (JSON) → Component (Salesforce/Validator) → Utils (CSV/File/Encryption) → Output CSV → Next DataStage Stage
+
+What DataStage Execute Command actually runs:
+
+python /opt/custom_components/runner.py salesforce-connector \
+  --context /tmp/datastage_job_20240811_143022_context.json \
+  --log-level INFO
