@@ -1,0 +1,456 @@
+# DataPy Framework Specification
+
+## Overview
+A Python framework for creating reusable, Talend-like ETL components that can be invoked from both CLI (Autosys/DataStage) and other Python scripts. The framework provides unified parameter management, logging, and result handling.
+
+## Repository Structure
+```
+etl-platform/
+├── datapy/                     # Framework (Org-Level)
+│   ├── mod_manager/            # Framework engine
+│   │   ├── __init__.py
+│   │   ├── cli.py              # CLI runner
+│   │   ├── sdk.py              # Python SDK
+│   │   ├── logger.py           # Common logging
+│   │   ├── params.py           # Parameter management
+│   │   ├── result.py           # ModResult interface
+│   │   ├── base.py             # Base classes
+│   │   └── project_config.py   # Project config loader
+│   ├── mods/                   # All reusable mods (shared by everyone)
+│   │   ├── extractors/
+│   │   │   ├── csv_reader.py
+│   │   │   ├── api_client.py
+│   │   │   └── database_reader.py
+│   │   ├── transformers/
+│   │   │   ├── data_cleaner.py
+│   │   │   └── validator.py
+│   │   └── loaders/
+│   │       ├── database_writer.py
+│   │       └── s3_uploader.py
+│   └── tests/                  # Framework tests
+│       ├── mod_manager/
+│       └── mods/
+│
+└── projects/                   # All Projects
+    ├── customer-analytics/
+    │   ├── project_defaults.yaml
+    │   └── jobs/
+    │       ├── daily-etl/
+    │       │   ├── daily_customer_etl.py      # Python orchestration
+    │       │   └── daily_customer_etl.yaml    # CLI config
+    │       ├── weekly-reports/
+    │       │   ├── weekly_reports.py
+    │       │   └── weekly_reports.yaml
+    │       └── data-quality/
+    │           └── data_quality_check.yaml
+    │
+    ├── finance-reporting/
+    │   ├── project_defaults.yaml
+    │   └── jobs/
+    │       ├── monthly-close/
+    │       │   ├── monthly_close.py
+    │       │   └── monthly_close.yaml
+    │       └── daily-reconciliation/
+    │           └── daily_recon.yaml
+    │
+    └── sales-analytics/
+        ├── project_defaults.yaml
+        └── jobs/
+            ├── lead-scoring/
+            │   └── lead_scoring.py
+            └── pipeline-analysis/
+                └── pipeline_analysis.yaml
+```
+
+## Core Framework Components
+
+### 1. Common Result Interface
+**ModResult Class** provides consistent output format across all mods:
+
+```python
+# datapy/mod_manager/result.py
+from typing import Dict, List, Optional, Any
+import time
+import uuid
+
+class ModResult:
+    def __init__(self, mod_name: str):
+        self.mod_name = mod_name
+        self.start_time = time.time()
+        self.run_id = f"{mod_name}_{uuid.uuid4().hex[:8]}"
+        self.warnings = []
+        self.errors = []
+        self.metrics = {}
+        self.artifacts = {}
+    
+    def add_warning(self, message: str):
+        self.warnings.append(message)
+    
+    def add_error(self, message: str):
+        self.errors.append(message)
+    
+    def add_metric(self, key: str, value: Any):
+        self.metrics[key] = value
+    
+    def add_artifact(self, key: str, path: str):
+        self.artifacts[key] = path
+    
+    def add_global(self, key: str, value: Any):
+        self.globals[key] = value  # NEW: Add shared state values
+    
+    def success(self) -> Dict:
+        return self._build_result("success")
+    
+    def warning(self) -> Dict:
+        return self._build_result("warning")
+    
+    def error(self, exit_code: int = 30) -> Dict:
+        return self._build_result("error", exit_code)
+```
+
+### 2. Required Metadata Enforcement
+**BaseModParams** enforces required metadata for all mods:
+
+```python
+# datapy/mod_manager/base.py
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+class ModMetadata(BaseModel):
+    name: str = Field(..., description="Mod name")
+    version: str = Field(..., description="Mod version (semver)")
+    description: str = Field(..., description="Mod description")
+    author: Optional[str] = Field(None, description="Mod author")
+    tags: List[str] = Field(default_factory=list, description="Mod tags")
+
+class BaseModParams(BaseModel):
+    _metadata: ModMetadata = Field(..., description="Required mod metadata")
+    
+    class Config:
+        fields = {'_metadata': {'exclude': True}}
+```
+
+### 1. Mods (Reusable Components)
+Each mod is a Python module with:
+- **Required metadata** (name, version, description) for tracking
+- **Pydantic Params class** inheriting from BaseModParams
+- **run() function** that executes the mod logic  
+- **ModResult interface** for consistent output format
+
+**Example Mod Structure:**
+```python
+# mods/extractors/csv_reader.py
+from datapy.mod_manager.base import BaseModParams, ModMetadata
+from datapy.mod_manager.result import ModResult
+from typing import Optional
+
+# Required metadata for all mods
+METADATA = ModMetadata(
+    name="csv_reader",
+    version="1.0.0",
+    description="Reads CSV files with validation and format conversion",
+    author="DataPy Team",
+    tags=["extractor", "csv", "file"]
+)
+
+class Params(BaseModParams):
+    _metadata: ModMetadata = METADATA
+    
+    input_path: str
+    delimiter: str = ","
+    encoding: Optional[str] = "utf-8"
+
+def run(params: Params):
+    result = ModResult("csv_reader")
+    
+    try:
+        # Mod logic here
+        result.add_metric("rows_processed", 10000)
+        result.add_artifact("output_data", "/path/to/output.parquet")
+        
+        return result.success()
+    except Exception as e:
+        result.add_error(str(e))
+        return result.error(exit_code=30)
+```
+
+### 2. CLI Interface
+**Mod Execution:**
+```bash
+# Direct mod with params
+python -m datapy run-mod datapy.mods.extractors.csv_reader --params params.yaml
+```
+
+**Script Execution:**
+```bash
+# Run any Python script with framework features
+python -m datapy run-script /path/to/user_script.py --params params.yaml
+```
+
+### 3. Python SDK
+```python
+from core.sdk import set_global_config, run_mod
+
+# Set global configuration once
+set_global_config({
+    "base_path": "/data/2024-08-12",
+    "log_level": "DEBUG",
+    "log_path": "/logs/etl/"
+})
+
+# Run mods with minimal params
+result = run_mod("mods.extractors.csv_reader", {
+    "input_path": "customers.csv",
+    "delimiter": "|"
+})
+```
+
+## Parameter Management
+
+### Project-Level Configuration
+Each project has its own configuration hierarchy with clear inheritance:
+
+**Parameter Resolution Chain:**
+**Mod Defaults (in .py file) → Project Defaults → Job Mod Params**
+
+**Project Defaults Configuration:**
+```yaml
+# projects/customer-analytics/project_defaults.yaml
+project_name: "customer_analytics"
+project_version: "2.1.0"
+
+# Project-specific mod defaults
+mod_defaults:
+  api_client:
+    endpoint: "https://customer-analytics-api.internal.com"
+    timeout: 60
+    auth_method: "oauth2"
+  
+  database_reader:
+    connection_string: "postgresql://analytics-db:5432/customer_data"
+    pool_size: 20
+    
+  csv_reader:
+    encoding: "utf-8"
+    base_path: "/data/customer_analytics"
+
+# Project logging settings
+logging:
+  base_path: "/logs/customer_analytics"
+  retention_days: 30
+```
+
+**Job Config File (job_config.yaml):**
+```yaml
+# projects/customer-analytics/jobs/daily-etl/daily_customer_etl.yaml
+globals:
+  base_path: "/data/2024-08-12"
+  log_level: "DEBUG"
+  log_path: "/logs/etl/"
+  log_format: "json"
+  encoding: "utf-8"
+
+mods:
+  csv_reader:
+    input_path: "customers.csv"  # Inherits base_path from project defaults
+    delimiter: "|"
+  
+  data_cleaner:
+    null_strategy: "drop"
+    min_length: 3
+  
+  database_writer:
+    table_name: "customers"  # Inherits connection_string from project defaults
+    batch_size: 1000
+```
+
+**Parameter Resolution:**
+- Mods inherit project-level defaults
+- Job globals override project settings  
+- Local mod params override all previous levels
+- Required metadata enforced for all mods
+- Variable substitution: `${globals.base_path}`
+
+**Configuration Discovery:**
+Framework automatically discovers project configuration using convention-based search:
+1. `./project_defaults.yaml` (current working directory)
+2. `../project_defaults.yaml` (parent directory - for jobs in subfolders)
+3. `../../project_defaults.yaml` (for deeply nested job structures)
+4. No project config found (use only mod defaults)
+
+## Standard Result Format
+
+**Success Response:**
+```python
+{
+    "status": "success",        # success, warning, error
+    "execution_time": 2.34,     # seconds
+    "metrics": {
+        "rows_processed": 10000,
+        "rows_output": 9876,
+        "memory_used_mb": 45.2
+    },
+    "artifacts": {
+        "output_data": "/data/processed/customers_clean.parquet",
+        "metadata": "/data/processed/customers_clean.metadata.json"
+    },
+    "globals": {                # NEW: Shared state for cross-mod communication
+        "batch_id": "BATCH_20240812_001",
+        "total_records": 10000,
+        "processing_date": "2024-08-12"
+    },
+    "warnings": [
+        "Found 124 duplicate records, removed automatically"
+    ],
+    "errors": [],
+    "logs": {
+        "log_file": "/logs/etl/customer_etl_job_20240812_143022.log",
+        "session_id": "session-uuid-12345",
+        "run_id": "component-uuid-67890"
+    }
+}
+```
+
+**Error Response:**
+```python
+{
+    "status": "error",
+    "execution_time": 0.5,
+    "errors": ["File not found: /data/missing_file.csv"],
+    "exit_code": 20,
+    "globals": {},              # Empty but present for consistency
+    "logs": {
+        "log_file": "/logs/etl/customer_etl_job_20240812_143022.log",
+        "session_id": "session-uuid-12345",
+        "run_id": "component-uuid-67890"
+    }
+}
+```
+
+## Logging Framework
+
+### Consolidated Logging Strategy
+- **Single log file per execution session** - all components log to same file
+- **JSON structured logging** to stderr for machine parsing
+- **Smart log file naming**:
+  - CLI execution: Uses YAML config filename (e.g., `customer_etl_job.log`)
+  - Python script: Uses Python script filename (e.g., `my_pipeline.log`)
+- **Configurable log levels** via globals or CLI
+- **Automatic context** (mod name, run ID, timestamp, session ID)
+
+**Log File Naming:**
+```bash
+# CLI execution
+python -m datapy run-job customer_etl_job.yaml csv_reader
+# → Creates: /logs/etl/customer_etl_job_20240812_143022.log
+
+# Python script execution
+python my_data_pipeline.py
+# → Creates: /logs/etl/my_data_pipeline_20240812_143022.log
+```
+
+**Usage:**
+```python
+from core.logger import setup_logger
+
+# Logger automatically detects session and writes to consolidated file
+logger = setup_logger(__name__)
+logger.info("Processing started", extra={"rows": 1000, "component": "csv_reader"})
+```
+
+**CLI Log Level Control:**
+```bash
+python -m datapy run-job job_config.yaml csv_reader --log-level DEBUG
+```
+
+## Exit Codes (for CLI)
+- **0**: Success
+- **10**: Success with warnings
+- **20**: Validation error (bad parameters)
+- **30**: Runtime error
+- **40**: Timeout
+- **50**: Canceled
+
+## Usage Examples
+
+### CLI Usage (DataStage/Autosys)
+```bash
+# Execute from project directory
+cd projects/customer-analytics
+
+# Direct mod execution
+python -m datapy run-mod datapy.mods.extractors.csv_reader --params params.yaml
+
+# Custom script execution
+python -m datapy run-script jobs/daily-etl/daily_customer_etl.py --params custom_params.yaml
+```
+
+### Python Script Usage
+```python
+# projects/customer-analytics/jobs/daily-etl/daily_customer_etl.py
+from datapy.mod_manager.sdk import set_global_config, run_mod
+
+# Set job-level configuration
+set_global_config({
+    "base_path": "/data/2024-08-12",
+    "log_level": "INFO",
+    "log_path": "/logs/customer_etl/"
+})
+
+# Execute mod pipeline using framework mods
+csv_result = run_mod("datapy.mods.extractors.csv_reader", {
+    "input_path": "customers.csv",
+    "delimiter": "|"
+})
+
+if csv_result["status"] == "success":
+    clean_result = run_mod("datapy.mods.transformers.data_cleaner", {
+        "input_artifact": csv_result["artifacts"]["output_data"],
+        "null_strategy": "drop"
+    })
+    
+    if clean_result["status"] == "success":
+        load_result = run_mod("datapy.mods.loaders.database_writer", {
+            "input_artifact": clean_result["artifacts"]["output_data"],
+            "table_name": "customers"
+        })
+```
+
+## Key Design Principles
+
+1. **Single Responsibility**: Each mod does one thing well
+2. **Centralized Mods**: All teams contribute to and use shared `datapy/mods/`
+3. **Project Independence**: Each project has its own configuration and jobs
+4. **Flexible Job Structure**: Support both Python scripts and YAML configs
+5. **Clear Inheritance**: Project defaults → Job globals → Mod params
+6. **Consistency**: Same interface for CLI and Python usage
+7. **Validation**: Pydantic ensures parameter correctness
+8. **Metadata Enforcement**: Required versioning and documentation
+9. **Observability**: Structured logging and standard results
+10. **Simplicity**: Convention-based configuration discovery
+11. **Future-Ready**: Job folder structure supports future orchestration
+
+## Implementation Priority
+
+### Phase 1 (Urgent - Layer 1)
+1. **Mod Manager SDK** with project config management
+2. **CLI runner** for direct mod execution and script execution
+3. **Common logger** with JSON structured output
+4. **ModResult interface** for consistent outputs
+5. **Standard mod examples** (CSV reader, data cleaner, database writer)
+6. **Project structure** setup and convention-based config discovery
+
+### Phase 2 (Layer 2 - Future)
+1. **Job configuration runner** (`run-job` command for YAML-based orchestration)
+2. **Artifact manager** for data lineage tracking
+3. **Web UI** for mod discovery
+4. **Advanced orchestration** features
+5. **Performance monitoring** and metrics
+
+## Dependencies
+- **Pydantic**: Parameter validation and schema generation
+- **PyYAML**: Configuration file parsing
+- **Click**: CLI framework (optional, can use argparse)
+- **Standard library**: logging, importlib, sys
+
+This specification provides a complete blueprint for building a production-ready, scalable ETL mod framework that bridges the gap between scheduled jobs and custom Python development.
