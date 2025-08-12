@@ -5,61 +5,71 @@ A Python framework for creating reusable, Talend-like ETL components that can be
 
 ## Repository Structure
 ```
-etl-platform/
 ├── datapy/                     # Framework (Org-Level)
 │   ├── mod_manager/            # Framework engine
 │   │   ├── __init__.py
 │   │   ├── cli.py              # CLI runner
 │   │   ├── sdk.py              # Python SDK
 │   │   ├── logger.py           # Common logging
-│   │   ├── params.py           # Parameter management
+│   │   ├── params.py           # Parameter management + project config discovery
 │   │   ├── result.py           # ModResult interface
-│   │   ├── base.py             # Base classes
-│   │   └── project_config.py   # Project config loader
+│   │   └── base.py             # Base classes
+│   ├── __main__.py             # Enable python -m datapy execution
 │   ├── mods/                   # All reusable mods (shared by everyone)
-│   │   ├── extractors/
+│   │   ├── sources/
 │   │   │   ├── csv_reader.py
 │   │   │   ├── api_client.py
 │   │   │   └── database_reader.py
 │   │   ├── transformers/
 │   │   │   ├── data_cleaner.py
 │   │   │   └── validator.py
-│   │   └── loaders/
-│   │       ├── database_writer.py
-│   │       └── s3_uploader.py
+│   │   ├── sinks/
+│   │   │   ├── database_writer.py
+│   │   │   └── s3_uploader.py
+│   │   └── solos/
+│   │       ├── file_validator.py
+│   │       └── data_quality_checker.py
+│   ├── utils/                  # Common utility functions (not mods)
+│   │   ├── __init__.py
+│   │   ├── file_utils.py
+│   │   ├── data_utils.py
+│   │   └── common_utils.py
 │   └── tests/                  # Framework tests
 │       ├── mod_manager/
 │       └── mods/
 │
-└── projects/                   # All Projects
-    ├── customer-analytics/
-    │   ├── project_defaults.yaml
-    │   └── jobs/
-    │       ├── daily-etl/
-    │       │   ├── daily_customer_etl.py      # Python orchestration
-    │       │   └── daily_customer_etl.yaml    # CLI config
-    │       ├── weekly-reports/
-    │       │   ├── weekly_reports.py
-    │       │   └── weekly_reports.yaml
-    │       └── data-quality/
-    │           └── data_quality_check.yaml
-    │
-    ├── finance-reporting/
-    │   ├── project_defaults.yaml
-    │   └── jobs/
-    │       ├── monthly-close/
-    │       │   ├── monthly_close.py
-    │       │   └── monthly_close.yaml
-    │       └── daily-reconciliation/
-    │           └── daily_recon.yaml
-    │
-    └── sales-analytics/
-        ├── project_defaults.yaml
-        └── jobs/
-            ├── lead-scoring/
-            │   └── lead_scoring.py
-            └── pipeline-analysis/
-                └── pipeline_analysis.yaml
+├── projects/                   # All Projects
+│   ├── customer-analytics/
+│   │   ├── project_defaults.yaml
+│   │   └── jobs/
+│   │       ├── daily-etl/
+│   │       │   ├── daily_customer_etl.py      # Python orchestration
+│   │       │   └── daily_customer_etl.yaml    # CLI config
+│   │       ├── weekly-reports/
+│   │       │   ├── weekly_reports.py
+│   │       │   └── weekly_reports.yaml
+│   │       └── data-quality/
+│   │           └── data_quality_check.yaml
+│   │
+│   ├── finance-reporting/
+│   │   ├── project_defaults.yaml
+│   │   └── jobs/
+│   │       ├── monthly-close/
+│   │       │   ├── monthly_close.py
+│   │       │   └── monthly_close.yaml
+│   │       └── daily-reconciliation/
+│   │           └── daily_recon.yaml
+│   │
+│   └── sales-analytics/
+│       ├── project_defaults.yaml
+│       └── jobs/
+│           ├── lead-scoring/
+│           │   └── lead_scoring.py
+│           └── pipeline-analysis/
+│               └── pipeline_analysis.yaml
+├── setup.py
+├── requirements.txt
+└── README.md
 ```
 
 ## Core Framework Components
@@ -82,6 +92,7 @@ class ModResult:
         self.errors = []
         self.metrics = {}
         self.artifacts = {}
+        self.globals = {}
     
     def add_warning(self, message: str):
         self.warnings.append(message)
@@ -96,7 +107,7 @@ class ModResult:
         self.artifacts[key] = path
     
     def add_global(self, key: str, value: Any):
-        self.globals[key] = value  # NEW: Add shared state values
+        self.globals[key] = value  # Shared state values
     
     def success(self) -> Dict:
         return self._build_result("success")
@@ -130,7 +141,7 @@ class BaseModParams(BaseModel):
         fields = {'_metadata': {'exclude': True}}
 ```
 
-### 1. Mods (Reusable Components)
+### 3. Mods (Reusable Components)
 Each mod is a Python module with:
 - **Required metadata** (name, version, description) for tracking
 - **Pydantic Params class** inheriting from BaseModParams
@@ -139,7 +150,7 @@ Each mod is a Python module with:
 
 **Example Mod Structure:**
 ```python
-# mods/extractors/csv_reader.py
+# mods/sources/csv_reader.py
 from datapy.mod_manager.base import BaseModParams, ModMetadata
 from datapy.mod_manager.result import ModResult
 from typing import Optional
@@ -150,7 +161,7 @@ METADATA = ModMetadata(
     version="1.0.0",
     description="Reads CSV files with validation and format conversion",
     author="DataPy Team",
-    tags=["extractor", "csv", "file"]
+    tags=["source", "csv", "file"]
 )
 
 class Params(BaseModParams):
@@ -174,11 +185,11 @@ def run(params: Params):
         return result.error(exit_code=30)
 ```
 
-### 2. CLI Interface
+### 4. CLI Interface
 **Mod Execution:**
 ```bash
 # Direct mod with params
-python -m datapy run-mod datapy.mods.extractors.csv_reader --params params.yaml
+python -m datapy run-mod datapy.mods.sources.csv_reader --params params.yaml
 ```
 
 **Script Execution:**
@@ -187,9 +198,9 @@ python -m datapy run-mod datapy.mods.extractors.csv_reader --params params.yaml
 python -m datapy run-script /path/to/user_script.py --params params.yaml
 ```
 
-### 3. Python SDK
+### 5. Python SDK
 ```python
-from core.sdk import set_global_config, run_mod
+from datapy.mod_manager.sdk import set_global_config, run_mod
 
 # Set global configuration once
 set_global_config({
@@ -199,7 +210,7 @@ set_global_config({
 })
 
 # Run mods with minimal params
-result = run_mod("mods.extractors.csv_reader", {
+result = run_mod("datapy.mods.sources.csv_reader", {
     "input_path": "customers.csv",
     "delimiter": "|"
 })
@@ -294,7 +305,7 @@ Framework automatically discovers project configuration using convention-based s
         "output_data": "/data/processed/customers_clean.parquet",
         "metadata": "/data/processed/customers_clean.metadata.json"
     },
-    "globals": {                # NEW: Shared state for cross-mod communication
+    "globals": {                # Shared state for cross-mod communication
         "batch_id": "BATCH_20240812_001",
         "total_records": 10000,
         "processing_date": "2024-08-12"
@@ -351,7 +362,7 @@ python my_data_pipeline.py
 
 **Usage:**
 ```python
-from core.logger import setup_logger
+from datapy.mod_manager.logger import setup_logger
 
 # Logger automatically detects session and writes to consolidated file
 logger = setup_logger(__name__)
@@ -379,7 +390,7 @@ python -m datapy run-job job_config.yaml csv_reader --log-level DEBUG
 cd projects/customer-analytics
 
 # Direct mod execution
-python -m datapy run-mod datapy.mods.extractors.csv_reader --params params.yaml
+python -m datapy run-mod datapy.mods.sources.csv_reader --params params.yaml
 
 # Custom script execution
 python -m datapy run-script jobs/daily-etl/daily_customer_etl.py --params custom_params.yaml
@@ -398,7 +409,7 @@ set_global_config({
 })
 
 # Execute mod pipeline using framework mods
-csv_result = run_mod("datapy.mods.extractors.csv_reader", {
+csv_result = run_mod("datapy.mods.sources.csv_reader", {
     "input_path": "customers.csv",
     "delimiter": "|"
 })
@@ -410,7 +421,7 @@ if csv_result["status"] == "success":
     })
     
     if clean_result["status"] == "success":
-        load_result = run_mod("datapy.mods.loaders.database_writer", {
+        load_result = run_mod("datapy.mods.sinks.database_writer", {
             "input_artifact": clean_result["artifacts"]["output_data"],
             "table_name": "customers"
         })
@@ -429,6 +440,7 @@ if csv_result["status"] == "success":
 9. **Observability**: Structured logging and standard results
 10. **Simplicity**: Convention-based configuration discovery
 11. **Future-Ready**: Job folder structure supports future orchestration
+12. **Future Extensibility**: Framework supports adding orchestration/engine layer without touching existing mod framework
 
 ## Implementation Priority
 
@@ -446,6 +458,7 @@ if csv_result["status"] == "success":
 3. **Web UI** for mod discovery
 4. **Advanced orchestration** features
 5. **Performance monitoring** and metrics
+6. **Engine/Orchestration Layer** (`datapy/engine/` - DAG execution, workflow management)
 
 ## Dependencies
 - **Pydantic**: Parameter validation and schema generation
