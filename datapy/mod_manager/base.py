@@ -5,7 +5,9 @@ Provides the foundational classes that all mods must inherit from to ensure
 consistent metadata tracking and parameter validation across the framework.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from typing import List
+import re
 
 
 class ModMetadata(BaseModel):
@@ -18,6 +20,17 @@ class ModMetadata(BaseModel):
     name: str = Field(..., description="Mod name")
     version: str = Field(..., description="Mod version (semver)")
     description: str = Field(..., description="Mod description")
+    tags: List[str] = Field(default_factory=list, description="Mod tags")
+    
+    @field_validator('version')
+    @classmethod
+    def validate_version(cls, v: str) -> str:
+        """Validate version follows semantic versioning pattern."""
+        semver_pattern = r'^\d+\.\d+\.\d+$'
+
+        if not re.match(semver_pattern, v):
+            raise ValueError("version must follow format 'X.Y.Z' (e.g., '1.0.0')")
+        return v
 
 
 class BaseModParams(BaseModel):

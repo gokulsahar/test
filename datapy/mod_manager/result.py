@@ -5,10 +5,12 @@ Provides consistent result handling, metrics collection, and error reporting
 for both CLI and Python SDK usage patterns.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import time
 import uuid
+import logging
 
+logger = logging.getLogger(__name__)
 
 # Exit code constants for consistent error handling
 SUCCESS = 0
@@ -25,79 +27,182 @@ class ModResult:
     
     Provides consistent interface for collecting metrics, warnings, errors,
     artifacts, and shared state across all framework components.
+    
+    Thread-safe: Each instance is independent and designed for single-mod execution.
     """
     
-    def __init__(self, mod_name: str):
+    def __init__(self, mod_name: str) -> None:
         """
         Initialize a new mod result container.
         
         Args:
             mod_name: Name of the mod being executed
+            
+        Raises:
+            ValueError: If mod_name is empty or None
         """
+        if not mod_name or not isinstance(mod_name, str):
+            raise ValueError("mod_name must be a non-empty string")
+            
         self.mod_name = mod_name
         self.start_time = time.time()
         self.run_id = f"{mod_name}_{uuid.uuid4().hex[:8]}"
         self.warnings: List[str] = []
-        self.errors: List[str] = []
+        self.errors: List[Dict[str, Union[str, int]]] = []
         self.metrics: Dict[str, Any] = {}
         self.artifacts: Dict[str, str] = {}
         self.globals: Dict[str, Any] = {}
     
     def add_warning(self, message: str) -> None:
-        """Add a warning message to the result."""
-        self.warnings.append(message)
-    
-    def add_error(self, message: str, error_code: int) -> None:
         """
-        Add an error message to the result with mandatory error code.
+        Add a warning message to the result.
+        
+        Args:
+            message: Warning description
+        """
+        if message:
+            self.warnings.append(str(message))
+            logger.warning(f"[{self.mod_name}] {message}")
+    
+    def add_error(self, message: str, error_code: int = RUNTIME_ERROR) -> None:
+        """
+        Add an error message to the result with error code.
         
         Args:
             message: Error description
             error_code: Error code (use constants: VALIDATION_ERROR, RUNTIME_ERROR, etc.)
         """
-        self.errors.append({"message": message, "error_code": error_code})
+        if message:
+            error_entry = {"message": str(message), "error_code": error_code}
+            self.errors.append(error_entry)
+            logger.error(f"[{self.mod_name}] {message} (code: {error_code})")
     
     def add_metric(self, key: str, value: Any) -> None:
-        """Add a metric key-value pair to the result."""
-        self.metrics[key] = value
+        """
+        Add a metric key-value pair to the result.
+        
+        Args:
+            key: Metric name
+            value: Metric value (should be JSON serializable)
+        """
+        if key:
+            self.metrics[str(key)] = value
     
     def add_artifact(self, key: str, path: str) -> None:
-        """Add an artifact path to the result."""
-        self.artifacts[key] = path
+        """
+        Add an artifact path to the result.
+        
+        Args:
+            key: Artifact identifier
+            path: File path to the artifact
+        """
+        if key and path:
+            self.artifacts[str(key)] = str(path)
     
     def add_global(self, key: str, value: Any) -> None:
-        """Add a global state value for cross-mod communication."""
-        self.globals[key] = value
+        """
+        Add a global state value for cross-mod communication.
+        
+        Args:
+            key: Global variable name
+            value: Value to store (should be JSON serializable)
+        """
+        if key:
+            self.globals[str(key)] = value
     
     def success(self) -> Dict[str, Any]:
-        """Return a success result dictionary."""
+        """
+        Return a success result dictionary.
+        
+        Returns:
+            Standardized success result dictionary
+        """
         return self._build_result("success", SUCCESS)
     
     def warning(self) -> Dict[str, Any]:
-        """Return a warning result dictionary."""
+        """
+        Return a warning result dictionary.
+        
+        Returns:
+            Standardized warning result dictionary
+        """
         return self._build_result("warning", SUCCESS_WITH_WARNINGS)
     
     def error(self, exit_code: int = RUNTIME_ERROR) -> Dict[str, Any]:
-        """Return an error result dictionary with specified exit code."""
+        """
+        Return an error result dictionary with specified exit code.
+        
+        Args:
+            exit_code: Exit code for the error
+            
+        Returns:
+            Standardized error result dictionary
+        """
         return self._build_result("error", exit_code)
     
     def _build_result(self, status: str, exit_code: int) -> Dict[str, Any]:
-        """Build the standardized result dictionary."""
+        """
+        Build the standardized result dictionary.
+        
+        Args:
+            status: Result status (success, warning, error)
+            exit_code: Process exit code
+            
+        Returns:
+            Complete result dictionary
+            
+        Raises:
+            ValueError: If required fields are missing or invalid
+        """
         execution_time = time.time() - self.start_time
+        
+        # Validation: ensure we have required fields
+        if not self.mod_name:
+            raise ValueError("mod_name cannot be empty")
+        if not self.run_id:
+            raise ValueError("run_id cannot be empty")
+        if status not in ("success", "warning", "error"):
+            raise ValueError(f"Invalid status: {status}")
         
         result = {
             "status": status,
             "execution_time": round(execution_time, 3),
             "exit_code": exit_code,
-            "metrics": self.metrics,
-            "artifacts": self.artifacts,
-            "globals": self.globals,
-            "warnings": self.warnings,
-            "errors": self.errors,
+            "metrics": self.metrics.copy(),
+            "artifacts": self.artifacts.copy(),
+            "globals": self.globals.copy(),
+            "warnings": self.warnings.copy(),
+            "errors": self.errors.copy(),
             "logs": {
                 "run_id": self.run_id,
                 "mod_name": self.mod_name
             }
         }
+        
+        # Log the final result
+        logger.info(f"[{self.mod_name}] Execution completed with status: {status} "
+                   f"(time: {result['execution_time']}s, exit_code: {exit_code})")
             
         return result
+
+
+# Convenience functions for common exit codes
+def validation_error(mod_name: str, message: str) -> Dict[str, Any]:
+    """Create a validation error result."""
+    result = ModResult(mod_name)
+    result.add_error(message, VALIDATION_ERROR)
+    return result.error(VALIDATION_ERROR)
+
+
+def runtime_error(mod_name: str, message: str) -> Dict[str, Any]:
+    """Create a runtime error result."""
+    result = ModResult(mod_name)
+    result.add_error(message, RUNTIME_ERROR)
+    return result.error(RUNTIME_ERROR)
+
+
+def timeout_error(mod_name: str, message: str) -> Dict[str, Any]:
+    """Create a timeout error result."""
+    result = ModResult(mod_name)
+    result.add_error(message, TIMEOUT)
+    return result.error(TIMEOUT)
