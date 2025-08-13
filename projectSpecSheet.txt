@@ -132,7 +132,6 @@ class ModMetadata(BaseModel):
     version: str = Field(..., description="Mod version (semver)")
     description: str = Field(..., description="Mod description")
     author: Optional[str] = Field(None, description="Mod author")
-    tags: List[str] = Field(default_factory=list, description="Mod tags")
 
 class BaseModParams(BaseModel):
     _metadata: ModMetadata = Field(..., description="Required mod metadata")
@@ -159,9 +158,7 @@ from typing import Optional
 METADATA = ModMetadata(
     name="csv_reader",
     version="1.0.0",
-    description="Reads CSV files with validation and format conversion",
-    author="DataPy Team",
-    tags=["source", "csv", "file"]
+    description="Reads CSV files with validation and format conversion"
 )
 
 class Params(BaseModParams):

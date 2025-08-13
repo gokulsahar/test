@@ -6,7 +6,6 @@ with automatic session management and smart log file naming.
 """
 
 import logging
-import logging.handlers
 import json
 import sys
 import uuid
