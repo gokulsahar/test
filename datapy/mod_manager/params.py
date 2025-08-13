@@ -39,13 +39,24 @@ class ProjectConfig:
     
     def _discover_project_config(self) -> None:
         """
-        Discover project configuration in the same directory.
+        Discover project configuration in the parent directory.
         
-        Looks for project_defaults.yaml in the current directory only.
+        Looks for project_defaults.yaml in the parent directory (typical project structure).
+        Falls back to current directory if not found in parent.
         """
-        config_path = self.search_path / "project_defaults.yaml"
+        # Primary search: parent directory (typical case)
+        parent_config_path = self.search_path.parent / "project_defaults.yaml"
         
-        if config_path.exists() and config_path.is_file():
+        # Fallback search: current directory
+        current_config_path = self.search_path / "project_defaults.yaml"
+        
+        config_path = None
+        if parent_config_path.exists() and parent_config_path.is_file():
+            config_path = parent_config_path
+        elif current_config_path.exists() and current_config_path.is_file():
+            config_path = current_config_path
+        
+        if config_path:
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     self.config_data = yaml.safe_load(f) or {}
