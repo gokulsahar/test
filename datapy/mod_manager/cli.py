@@ -2,7 +2,7 @@
 Click-based CLI runner for DataPy framework.
 
 Provides command-line interface for executing mods and Python scripts
-with parameter resolution and structured logging.
+with parameter resolution and structured logging using execution context management.
 """
 
 import json
@@ -15,7 +15,7 @@ import click
 import yaml
 
 from .sdk import run_mod, set_global_config
-from .logger import setup_logging, setup_logger
+from .logger import execution_logger, setup_logger
 from .params import load_job_config
 
 logger = setup_logger(__name__)
@@ -60,14 +60,15 @@ def run_mod_command(ctx: click.Context, mod_path: str, params: Optional[str], ex
         # Load parameters from file
         job_params = {}
         globals_config = {}
+        execution_name = "cli_execution"
         
         if params:
             try:
                 config = load_job_config(params)
-                # TODO: Add support for JSON parameter files
                 globals_config = config.get('globals', {})
                 mod_name = mod_path.split('.')[-1]
                 job_params = config.get('mods', {}).get(mod_name, {})
+                execution_name = Path(params).stem
             except Exception as e:
                 click.echo(f"Error loading parameters from {params}: {e}", err=True)
                 sys.exit(20)  # VALIDATION_ERROR
@@ -76,38 +77,38 @@ def run_mod_command(ctx: click.Context, mod_path: str, params: Optional[str], ex
         if log_level:
             globals_config['log_level'] = log_level
         
-        # Setup logging and global config
-        execution_name = Path(params).stem if params else 'cli_execution'
-        setup_logging(globals_config, execution_name)
-        set_global_config(globals_config)
-        
         if not quiet:
             click.echo(f"Executing mod: {mod_path}")
             if params:
                 click.echo(f"Using parameters from: {params}")
         
-        # Execute the mod
-        result = run_mod(mod_path, job_params)
-        
-        # Output results
-        if quiet:
-            # Minimal output: just status
-            click.echo(result['status'])
-        else:
-            # Full JSON result to stdout
-            click.echo(json.dumps(result, indent=2))
-        
-        # Handle exit code
-        exit_code = result.get('exit_code', 30)
-        if result['status'] == 'error' and exit_on_error:
-            if not quiet:
-                click.echo(f"Mod failed with exit code: {exit_code}", err=True)
-            sys.exit(exit_code)
-        elif result['status'] == 'warning':
-            sys.exit(10)  # SUCCESS_WITH_WARNINGS
-        else:
-            sys.exit(0)   # SUCCESS
+        # Use execution context manager for proper logging lifecycle
+        with execution_logger(execution_name, globals_config) as exec_ctx:
+            # Set global config for SDK
+            set_global_config(globals_config)
             
+            # Execute the mod
+            result = run_mod(mod_path, job_params)
+            
+            # Output results
+            if quiet:
+                # Minimal output: just status
+                click.echo(result['status'])
+            else:
+                # Full JSON result to stdout
+                click.echo(json.dumps(result, indent=2))
+            
+            # Handle exit code
+            exit_code = result.get('exit_code', 30)
+            if result['status'] == 'error' and exit_on_error:
+                if not quiet:
+                    click.echo(f"Mod failed with exit code: {exit_code}", err=True)
+                sys.exit(exit_code)
+            elif result['status'] == 'warning':
+                sys.exit(10)  # SUCCESS_WITH_WARNINGS
+            else:
+                sys.exit(0)   # SUCCESS
+                
     except Exception as e:
         click.echo(f"CLI execution failed: {e}", err=True)
         if not quiet:
@@ -139,75 +140,200 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
     
     try:
         script_file = Path(script_path)
+        execution_name = script_file.name
+        globals_config = {}
         
         # Load parameters and setup globals if provided
         if params:
             try:
                 config = load_job_config(params)
-                # TODO: Add support for JSON parameter files
                 globals_config = config.get('globals', {})
                 
                 # Override log level if specified
                 if log_level:
                     globals_config['log_level'] = log_level
-                
-                # Setup logging and global config
-                execution_name = script_file.stem
-                setup_logging(globals_config, execution_name)
-                set_global_config(globals_config)
-                
+                    
             except Exception as e:
                 click.echo(f"Error loading parameters from {params}: {e}", err=True)
                 sys.exit(20)  # VALIDATION_ERROR
         else:
             # Setup basic logging without params
-            globals_config = {}
             if log_level:
                 globals_config['log_level'] = log_level
-            
-            execution_name = script_file.stem
-            setup_logging(globals_config, execution_name)
-            set_global_config(globals_config)
         
         if not quiet:
             click.echo(f"Executing script: {script_path}")
             if params:
                 click.echo(f"Using parameters from: {params}")
         
-        # Execute the Python script
-        try:
-            # Use subprocess to execute the script in the same Python environment
-            cmd = [sys.executable, str(script_file)]
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=script_file.parent)
+        # Use execution context manager for proper logging lifecycle
+        with execution_logger(execution_name, globals_config) as exec_ctx:
+            # Set global config for any framework usage in the script
+            set_global_config(globals_config)
             
-            if not quiet:
-                # Print script output
-                if result.stdout:
-                    click.echo("--- Script Output ---")
-                    click.echo(result.stdout)
+            # Execute the Python script
+            try:
+                # Prepare environment variables for the script to access config
+                import os
+                env = os.environ.copy()
                 
-                if result.stderr:
-                    click.echo("--- Script Errors ---", err=True)
-                    click.echo(result.stderr, err=True)
-            
-            # Handle script exit code
-            if result.returncode != 0 and exit_on_error:
-                if quiet:
-                    click.echo("error")
+                # Add DataPy config as environment variables if needed
+                if globals_config:
+                    env['DATAPY_CONFIG'] = json.dumps(globals_config)
+                
+                # Use subprocess to execute the script
+                cmd = [sys.executable, str(script_file)]
+                result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    cwd=script_file.parent,
+                    env=env
+                )
+                
+                if not quiet:
+                    # Print script output
+                    if result.stdout:
+                        click.echo("--- Script Output ---")
+                        click.echo(result.stdout)
+                    
+                    if result.stderr:
+                        click.echo("--- Script Errors ---", err=True)
+                        click.echo(result.stderr, err=True)
+                
+                # Handle script exit code
+                if result.returncode != 0 and exit_on_error:
+                    if quiet:
+                        click.echo("error")
+                    else:
+                        click.echo(f"Script failed with exit code: {result.returncode}", err=True)
+                    sys.exit(result.returncode)
                 else:
-                    click.echo(f"Script failed with exit code: {result.returncode}", err=True)
-                sys.exit(result.returncode)
-            else:
-                if quiet:
-                    click.echo("success" if result.returncode == 0 else "warning")
-                sys.exit(result.returncode)
+                    if quiet:
+                        click.echo("success" if result.returncode == 0 else "warning")
+                    sys.exit(result.returncode)
+                    
+            except Exception as e:
+                click.echo(f"Failed to execute script: {e}", err=True)
+                sys.exit(30)  # RUNTIME_ERROR
                 
-        except Exception as e:
-            click.echo(f"Failed to execute script: {e}", err=True)
-            sys.exit(30)  # RUNTIME_ERROR
-            
     except Exception as e:
         click.echo(f"CLI execution failed: {e}", err=True)
+        if not quiet:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+        sys.exit(30)  # RUNTIME_ERROR
+
+
+@cli.command('run-job')
+@click.argument('job_config', type=click.Path(exists=True, readable=True))
+@click.option('--exit-on-error', is_flag=True, default=True,
+              help='Exit with error code on any mod failure (default: True)')
+@click.pass_context
+def run_job_command(ctx: click.Context, job_config: str, exit_on_error: bool) -> None:
+    """
+    Execute multiple mods from a job configuration file (YAML orchestration).
+    
+    JOB_CONFIG: Path to job configuration YAML file
+    
+    Example:
+        datapy run-job jobs/daily-etl/daily_pipeline.yaml
+        
+    Job YAML format:
+        globals:
+          log_level: INFO
+          base_path: "/data/2024-08-12"
+        
+        mods:
+          csv_reader:
+            input_path: "customers.csv"
+          data_cleaner:
+            strategy: "drop"
+          database_writer:
+            table_name: "customers"
+    """
+    quiet = ctx.obj.get('quiet', False)
+    log_level = ctx.obj.get('log_level')
+    
+    try:
+        # Load job configuration
+        config = load_job_config(job_config)
+        globals_config = config.get('globals', {})
+        mods_config = config.get('mods', {})
+        
+        # Override log level if specified
+        if log_level:
+            globals_config['log_level'] = log_level
+        
+        execution_name = Path(job_config).stem
+        
+        if not quiet:
+            click.echo(f"Executing job: {job_config}")
+            click.echo(f"Mods to execute: {list(mods_config.keys())}")
+        
+        # Use execution context manager for proper logging lifecycle
+        with execution_logger(execution_name, globals_config) as exec_ctx:
+            # Set global config for SDK
+            set_global_config(globals_config)
+            
+            results = []
+            failed = False
+            
+            # Execute each mod in sequence
+            for mod_name, mod_params in mods_config.items():
+                if not quiet:
+                    click.echo(f"\n--- Executing mod: {mod_name} ---")
+                
+                try:
+                    result = run_mod(mod_name, mod_params)
+                    results.append({
+                        "mod": mod_name,
+                        "result": result
+                    })
+                    
+                    if not quiet:
+                        click.echo(f"Mod {mod_name} completed with status: {result['status']}")
+                    
+                    # Check for failure
+                    if result['status'] == 'error':
+                        failed = True
+                        if exit_on_error:
+                            click.echo(f"Job failed at mod: {mod_name}", err=True)
+                            break
+                            
+                except Exception as e:
+                    click.echo(f"Error executing mod {mod_name}: {e}", err=True)
+                    failed = True
+                    if exit_on_error:
+                        break
+            
+            # Output final results
+            if quiet:
+                if failed:
+                    click.echo("error")
+                else:
+                    click.echo("success")
+            else:
+                click.echo("\n--- Job Execution Summary ---")
+                click.echo(json.dumps({
+                    "job_config": job_config,
+                    "execution_id": exec_ctx.execution_id,
+                    "total_mods": len(mods_config),
+                    "executed_mods": len(results),
+                    "failed": failed,
+                    "results": results
+                }, indent=2))
+            
+            # Handle exit code
+            if failed and exit_on_error:
+                sys.exit(30)  # RUNTIME_ERROR
+            elif failed:
+                sys.exit(10)  # SUCCESS_WITH_WARNINGS
+            else:
+                sys.exit(0)   # SUCCESS
+                
+    except Exception as e:
+        click.echo(f"Job execution failed: {e}", err=True)
         if not quiet:
             import traceback
             click.echo(traceback.format_exc(), err=True)

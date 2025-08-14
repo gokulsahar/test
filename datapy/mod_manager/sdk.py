@@ -7,15 +7,17 @@ parameter resolution, and global configuration management.
 
 import importlib
 import inspect
+import os
+import atexit
 from typing import Dict, Any, Optional
-from .logger import setup_logging, configure_from_globals, setup_logger
+from .logger import start_execution, finalize_execution, get_current_context, setup_logger
 from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
 from .base import ModMetadata, BaseModParams
 
 # Global configuration storage
 _global_config: Dict[str, Any] = {}
-_logging_configured: bool = False
+_auto_context_started: bool = False
 
 logger = setup_logger(__name__)
 
@@ -34,18 +36,10 @@ def set_global_config(config: Dict[str, Any]) -> None:
             "log_path": "/logs/etl/"
         })
     """
-    global _global_config, _logging_configured
+    global _global_config
     
     _global_config.update(config)
-    
-    # Auto-configure logging if not already done
-    if not _logging_configured:
-        try:
-            configure_from_globals(_global_config)
-            _logging_configured = True
-            logger.info("Global configuration set and logging configured", extra={"config": config})
-        except Exception as e:
-            logger.warning(f"Failed to configure logging from globals: {e}")
+    logger.info("Global configuration set", extra={"config": config})
 
 
 def get_global_config() -> Dict[str, Any]:
@@ -56,6 +50,65 @@ def get_global_config() -> Dict[str, Any]:
         Copy of global configuration dictionary
     """
     return _global_config.copy()
+
+
+def _detect_script_name() -> str:
+    """
+    Detect the main script filename using call stack inspection.
+    
+    Returns:
+        Script filename or fallback name for interactive/edge cases
+    """
+    frame = inspect.currentframe()
+    try:
+        while frame:
+            filename = frame.f_code.co_filename
+            # Skip framework files and interactive contexts
+            if (filename != __file__ and 
+                not filename.endswith(('sdk.py', 'cli.py', 'logger.py', 'params.py', 'result.py', 'base.py')) and
+                not filename.startswith('<') and  # Skip <stdin>, <console>, etc.
+                not 'site-packages' in filename):  # Skip library files
+                return os.path.basename(filename)
+            frame = frame.f_back
+    finally:
+        del frame
+    
+    # Fallback for interactive/edge cases
+    return "python_execution.py"
+
+
+def _ensure_execution_context() -> None:
+    """
+    Ensure execution context exists, auto-starting if needed.
+    
+    This handles the automatic logging setup for SDK usage where users
+    just call run_mod() without explicit context management.
+    """
+    global _auto_context_started
+    
+    if get_current_context() is None:
+        # Auto-detect script name and start execution context
+        script_name = _detect_script_name()
+        
+        # Merge global config for logging setup
+        log_config = {}
+        if _global_config:
+            # Extract logging configuration from globals
+            if "log_level" in _global_config:
+                log_config["log_level"] = _global_config["log_level"]
+            if "log_path" in _global_config:
+                log_config["log_path"] = _global_config["log_path"]
+            if "log_format" in _global_config:
+                log_config["log_format"] = _global_config["log_format"]
+        
+        # Start execution context
+        start_execution(script_name, log_config if log_config else None)
+        _auto_context_started = True
+        
+        # Register cleanup when Python process exits
+        atexit.register(finalize_execution)
+        
+        logger.info(f"Auto-started execution context for script: {script_name}")
 
 
 def _resolve_mod_path(mod_identifier: str) -> str:
@@ -87,19 +140,22 @@ def _resolve_mod_path(mod_identifier: str) -> str:
     for path in search_paths:
         try:
             importlib.import_module(path)
-            logger.info(f"Resolved mod '{mod_identifier}' to '{path}'")
+            logger.debug(f"Resolved mod '{mod_identifier}' to '{path}'")
             return path
         except ImportError:
             continue
     
-    # If not found in standard locations, assume it's a direct mod name
-    # This allows for custom mod locations
+    # If not found in standard locations, raise error
     raise ImportError(f"Mod '{mod_identifier}' not found in standard locations: {search_paths}")
 
 
 def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Execute a DataPy mod with parameter resolution and validation.
+    Execute a DataPy mod with automatic context management and parameter resolution.
+    
+    This function automatically handles logging setup, parameter resolution,
+    and execution context management. Users can simply call run_mod() without
+    worrying about context setup.
     
     Args:
         mod_path: Module path (e.g., "datapy.mods.sources.csv_reader") 
@@ -109,20 +165,16 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Standardized mod result dictionary
         
-    Raises:
-        ImportError: If mod module cannot be imported
-        AttributeError: If mod is missing required components
-        ValidationError: If parameters don't match mod's schema
+    Example:
+        # Simple usage - no context management needed
+        result = run_mod("csv_reader", {"input_path": "data.csv"})
+        
+        # Multiple mods - all go to same log file
+        result1 = run_mod("csv_reader", {"input_path": "data.csv"})
+        result2 = run_mod("data_cleaner", {"strategy": "drop"})
     """
-    global _logging_configured
-    
-    # Ensure logging is configured
-    if not _logging_configured:
-        try:
-            configure_from_globals(_global_config)
-            _logging_configured = True
-        except Exception as e:
-            logger.warning(f"Auto-logging setup failed: {e}")
+    # Ensure execution context exists (auto-start if needed)
+    _ensure_execution_context()
     
     try:
         # Resolve mod path if just name provided
@@ -186,7 +238,7 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             return validation_error(mod_name, f"Parameter validation failed: {e}")
         
-        # Setup mod-specific logger
+        # Setup mod-specific logger (this gets the next mod instance automatically)
         mod_logger = setup_logger(f"{resolved_mod_path}.execution", mod_name=mod_name)
         mod_logger.info(f"Starting mod execution", extra={"params": resolved_params})
         
@@ -228,8 +280,18 @@ def clear_global_config() -> None:
     """
     Clear global configuration (primarily for testing).
     
-    Warning: This will reset all global settings and logging configuration.
+    Warning: This will reset all global settings.
     """
-    global _global_config, _logging_configured
+    global _global_config, _auto_context_started
     _global_config.clear()
-    _logging_configured = False
+    _auto_context_started = False
+
+
+def is_auto_context_active() -> bool:
+    """
+    Check if auto-context management is active.
+    
+    Returns:
+        True if SDK auto-started the execution context
+    """
+    return _auto_context_started

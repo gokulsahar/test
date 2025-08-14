@@ -1,8 +1,8 @@
 """
-Structured logging with session management for DataPy framework.
+Simplified logging with execution context management for DataPy framework.
 
-Provides consolidated logging with JSON output to stderr and file output
-with automatic session management and smart log file naming.
+Provides consolidated logging with temp folder lifecycle management,
+automatic file moving, and mod instance tracking.
 """
 
 import logging
@@ -10,57 +10,131 @@ import json
 import sys
 import uuid
 import time
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 import threading
+from contextlib import contextmanager
 
-# Global session state
-_session_lock = threading.Lock()
-_session_id: Optional[str] = None
-_session_log_file: Optional[str] = None
-_loggers_configured: bool = False
+# Global execution context
+_current_context: Optional['ExecutionContext'] = None
+_context_lock = threading.Lock()
 
 # Default configuration
 DEFAULT_LOG_CONFIG = {
     "log_level": "INFO",
-    "log_path": ".",
+    "log_path": "logs",
     "log_format": "json",
     "console_output": True
 }
 
 
+class ExecutionContext:
+    """
+    Tracks execution state and manages log file lifecycle.
+    """
+    
+    def __init__(self, execution_name: str, log_config: Dict[str, Any]):
+        """
+        Initialize execution context.
+        
+        Args:
+            execution_name: Name for log file (script/config name)
+            log_config: Logging configuration
+        """
+        self.execution_name = Path(execution_name).stem
+        self.timestamp = time.strftime("%Y%m%d_%H%M%S")
+        self.execution_id = f"{self.execution_name}_{self.timestamp}"
+        self.execution_type = "cli" if execution_name.endswith('.yaml') else "script"
+        
+        # Setup paths
+        self.log_config = log_config
+        self.log_base_path = Path(log_config.get("log_path", "logs"))
+        self.running_path = self.log_base_path / "running"
+        self.completed_path = self.log_base_path
+        
+        # Create directories
+        self.running_path.mkdir(parents=True, exist_ok=True)
+        self.completed_path.mkdir(parents=True, exist_ok=True)
+        
+        # Log file paths
+        self.log_filename = f"{self.execution_id}.log"
+        self.current_log_path = self.running_path / self.log_filename
+        self.final_log_path = self.completed_path / self.log_filename
+        
+        # Execution tracking
+        self.mod_counter = 0
+        self.start_time = time.time()
+        self.loggers_configured = False
+    
+    def get_next_mod_instance(self) -> str:
+        """Get next mod instance number."""
+        self.mod_counter += 1
+        return f"{self.mod_counter:03d}"
+    
+    def finalize(self) -> None:
+        """Move log file from running to completed directory."""
+        if self.current_log_path.exists():
+            # Close all file handlers first
+            self._close_file_handlers()
+            
+            # Move file to final location
+            if self.final_log_path.exists():
+                self.final_log_path.unlink()  # Remove existing file
+            
+            shutil.move(str(self.current_log_path), str(self.final_log_path))
+    
+    def _close_file_handlers(self) -> None:
+        """Close all file handlers to release file locks."""
+        for handler in logging.root.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                logging.root.removeHandler(handler)
+
+
 class DataPyFormatter(logging.Formatter):
-    """Custom formatter for DataPy structured logging."""
+    """JSON formatter for structured logging."""
     
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON structure."""
-        # Build structured log entry
+        context = get_current_context()
+        
         log_entry = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            "session_id": get_session_id(),
         }
+        
+        # Add execution context
+        if context:
+            log_entry.update({
+                "execution_id": context.execution_id,
+                "execution_type": context.execution_type,
+            })
         
         # Add mod-specific context if available
         if hasattr(record, 'mod_name'):
             log_entry["mod_name"] = record.mod_name
+        if hasattr(record, 'mod_instance'):
+            log_entry["mod_instance"] = record.mod_instance
         if hasattr(record, 'run_id'):
             log_entry["run_id"] = record.run_id
-        
-        # Add any extra fields
-        for key, value in record.__dict__.items():
-            if key not in ('name', 'msg', 'args', 'levelname', 'levelno', 
-                          'pathname', 'filename', 'module', 'lineno', 'funcName',
-                          'created', 'msecs', 'relativeCreated', 'thread',
-                          'threadName', 'processName', 'process', 'stack_info',
-                          'exc_info', 'exc_text', 'mod_name', 'run_id'):
-                log_entry[key] = value
         
         # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
+        
+        # Add any extra fields
+        for key, value in record.__dict__.items():
+            if key not in {
+                'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
+                'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
+                'relativeCreated', 'thread', 'threadName', 'processName', 
+                'process', 'stack_info', 'exc_info', 'exc_text', 'mod_name', 
+                'mod_instance', 'run_id'
+            }:
+                log_entry[key] = value
         
         return json.dumps(log_entry, default=str)
 
@@ -74,10 +148,14 @@ class DataPyConsoleFormatter(logging.Formatter):
         level = record.levelname.ljust(8)
         
         # Add mod context if available
-        context = ""
+        context_parts = []
         if hasattr(record, 'mod_name'):
-            context = f"[{record.mod_name}] "
+            mod_context = record.mod_name
+            if hasattr(record, 'mod_instance'):
+                mod_context += f"#{record.mod_instance}"
+            context_parts.append(mod_context)
         
+        context = f"[{' '.join(context_parts)}] " if context_parts else ""
         message = f"{timestamp} {level} {context}{record.getMessage()}"
         
         # Add exception if present
@@ -87,128 +165,147 @@ class DataPyConsoleFormatter(logging.Formatter):
         return message
 
 
-def get_session_id() -> str:
-    """
-    Get or create session ID for current execution.
-    
-    Returns:
-        Session ID string
-    """
-    global _session_id
-    
-    with _session_lock:
-        if _session_id is None:
-            _session_id = f"session_{uuid.uuid4().hex[:12]}"
-    
-    return _session_id
+def get_current_context() -> Optional[ExecutionContext]:
+    """Get current execution context."""
+    return _current_context
 
 
-def get_session_log_file() -> Optional[str]:
+@contextmanager
+def execution_logger(execution_name: str, log_config: Optional[Dict[str, Any]] = None):
     """
-    Get the current session's log file path.
-    
-    Returns:
-        Path to session log file or None if not set
-    """
-    return _session_log_file
-
-
-def setup_logging(
-    log_config: Optional[Dict[str, Any]] = None,
-    execution_name: Optional[str] = None
-) -> str:
-    """
-    Setup logging for DataPy framework with session management.
+    Context manager for execution logging lifecycle.
     
     Args:
-        log_config: Logging configuration override
         execution_name: Name for log file (script/config name)
+        log_config: Optional logging configuration override
+        
+    Yields:
+        ExecutionContext instance
+        
+    Example:
+        with execution_logger("daily_etl.yaml") as ctx:
+            run_mod("csv_reader", params)
+            run_mod("data_cleaner", params)
+        # Log file automatically moved to completed/
+    """
+    global _current_context
+    
+    # Merge configuration
+    config = DEFAULT_LOG_CONFIG.copy()
+    if log_config:
+        config.update(log_config)
+    
+    with _context_lock:
+        # Create execution context
+        context = ExecutionContext(execution_name, config)
+        _current_context = context
+        
+        try:
+            # Setup logging
+            _setup_handlers(context)
+            
+            # Log execution start
+            logger = logging.getLogger(__name__)
+            logger.info("DataPy execution started", extra={
+                "execution_id": context.execution_id,
+                "execution_type": context.execution_type,
+                "log_file": str(context.current_log_path),
+                "config": config
+            })
+            
+            yield context
+            
+        finally:
+            # Log execution end
+            execution_time = time.time() - context.start_time
+            logger.info("DataPy execution completed", extra={
+                "execution_time": round(execution_time, 3),
+                "total_mods": context.mod_counter
+            })
+            
+            # Finalize logging (move file)
+            context.finalize()
+            _current_context = None
+
+
+def start_execution(execution_name: str, log_config: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Start execution logging (alternative to context manager).
+    
+    Args:
+        execution_name: Name for log file
+        log_config: Optional logging configuration
         
     Returns:
-        Path to the created log file
+        Path to current log file
         
-    Raises:
-        OSError: If log directory cannot be created or accessed
+    Note: Must call finalize_execution() when done
     """
-    global _session_log_file, _loggers_configured
+    global _current_context
     
-    with _session_lock:
-        if _loggers_configured:
-            return _session_log_file
+    # Merge configuration
+    config = DEFAULT_LOG_CONFIG.copy()
+    if log_config:
+        config.update(log_config)
+    
+    with _context_lock:
+        # Create execution context
+        context = ExecutionContext(execution_name, config)
+        _current_context = context
         
-        # Merge configuration
-        config = DEFAULT_LOG_CONFIG.copy()
-        if log_config:
-            config.update(log_config)
+        # Setup logging
+        _setup_handlers(context)
         
-        # Determine log file name
-        if execution_name:
-            base_name = Path(execution_name).stem
-        else:
-            base_name = "datapy_execution"
-        
-        # Create unique log file name with timestamp
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        log_filename = f"{base_name}_{timestamp}.log"
-        
-        # Setup log directory
-        log_path = Path(config["log_path"])
-        try:
-            log_path.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise OSError(f"Cannot create log directory {log_path}: {e}")
-        
-        _session_log_file = str(log_path / log_filename)
-        
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(logging, config["log_level"].upper()))
-        
-        # Clear any existing handlers
-        root_logger.handlers.clear()
-        
-        # Setup file handler with JSON formatting
-        try:
-            file_handler = logging.FileHandler(_session_log_file, encoding='utf-8')
-            file_handler.setFormatter(DataPyFormatter())
-            root_logger.addHandler(file_handler)
-        except OSError as e:
-            raise OSError(f"Cannot create log file {_session_log_file}: {e}")
-        
-        # Setup console handler for stderr (JSON format)
-        stderr_handler = logging.StreamHandler(sys.stderr)
-        stderr_handler.setFormatter(DataPyFormatter())
-        root_logger.addHandler(stderr_handler)
-        
-        # Setup console handler for stdout (human readable) if enabled
-        if config.get("console_output", False):
-            console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setFormatter(DataPyConsoleFormatter())
-            # Only show INFO and above on console
-            console_handler.setLevel(logging.INFO)
-            root_logger.addHandler(console_handler)
-        
-        _loggers_configured = True
-        
-        # Log session start
+        # Log execution start
         logger = logging.getLogger(__name__)
-        logger.info("DataPy logging session started", extra={
-            "session_id": get_session_id(),
-            "log_file": _session_log_file,
+        logger.info("DataPy execution started", extra={
+            "execution_id": context.execution_id,
+            "execution_type": context.execution_type,
+            "log_file": str(context.current_log_path),
             "config": config
         })
         
-        return _session_log_file
+        return str(context.current_log_path)
 
 
-def setup_logger(name: str, mod_name: Optional[str] = None, run_id: Optional[str] = None) -> logging.Logger:
+def finalize_execution() -> Optional[str]:
+    """
+    Finalize execution logging and move log file.
+    
+    Returns:
+        Path to final log file location, or None if no active execution
+    """
+    global _current_context
+    
+    with _context_lock:
+        if _current_context is None:
+            return None
+        
+        context = _current_context
+        
+        # Log execution end
+        execution_time = time.time() - context.start_time
+        logger = logging.getLogger(__name__)
+        logger.info("DataPy execution completed", extra={
+            "execution_time": round(execution_time, 3),
+            "total_mods": context.mod_counter
+        })
+        
+        # Finalize and move file
+        context.finalize()
+        final_path = str(context.final_log_path)
+        _current_context = None
+        
+        return final_path
+
+
+def setup_logger(name: str, mod_name: Optional[str] = None) -> logging.Logger:
     """
     Setup a logger for a specific component with DataPy context.
     
     Args:
         name: Logger name (typically __name__)
         mod_name: Name of the mod using this logger
-        run_id: Unique run ID for this execution
         
     Returns:
         Configured logger instance
@@ -216,27 +313,70 @@ def setup_logger(name: str, mod_name: Optional[str] = None, run_id: Optional[str
     logger = logging.getLogger(name)
     
     # Add mod context to all log records from this logger
-    if mod_name or run_id:
-        old_factory = logging.getLogRecordFactory()
+    if mod_name:
+        # Get mod instance number from current context
+        context = get_current_context()
+        mod_instance = context.get_next_mod_instance() if context else "000"
+        run_id = f"{mod_name}_{mod_instance}_{uuid.uuid4().hex[:8]}"
         
-        def record_factory(*args, **kwargs):
-            record = old_factory(*args, **kwargs)
-            if mod_name:
-                record.mod_name = mod_name
-            if run_id:
-                record.run_id = run_id
-            return record
+        # Create a custom filter to add context
+        def add_context(record):
+            record.mod_name = mod_name
+            record.mod_instance = mod_instance
+            record.run_id = run_id
+            return True
         
-        # Note: This is a simplified approach. In production, you might want
-        # a more sophisticated way to manage per-logger context
-        logging.setLogRecordFactory(record_factory)
+        logger.addFilter(add_context)
     
     return logger
 
 
+def _setup_handlers(context: ExecutionContext) -> None:
+    """Setup logging handlers for the execution context."""
+    if context.loggers_configured:
+        return
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, context.log_config["log_level"].upper()))
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Setup file handler with JSON formatting
+    file_handler = logging.FileHandler(context.current_log_path, encoding='utf-8')
+    file_handler.setFormatter(DataPyFormatter())
+    root_logger.addHandler(file_handler)
+    
+    # Setup stderr handler for JSON output (for machine parsing)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(DataPyFormatter())
+    root_logger.addHandler(stderr_handler)
+    
+    # Setup console handler for human readable output (if enabled)
+    if context.log_config.get("console_output", False):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(DataPyConsoleFormatter())
+        console_handler.setLevel(logging.INFO)  # Only INFO and above on console
+        root_logger.addHandler(console_handler)
+    
+    context.loggers_configured = True
+
+
+def get_current_log_file() -> Optional[str]:
+    """
+    Get the current log file path.
+    
+    Returns:
+        Path to current log file or None if no active execution
+    """
+    context = get_current_context()
+    return str(context.current_log_path) if context else None
+
+
 def configure_from_globals(globals_config: Dict[str, Any], execution_name: Optional[str] = None) -> str:
     """
-    Configure logging from global configuration dictionary.
+    Configure logging from global configuration dictionary (legacy support).
     
     Args:
         globals_config: Global configuration containing logging settings
@@ -244,9 +384,6 @@ def configure_from_globals(globals_config: Dict[str, Any], execution_name: Optio
         
     Returns:
         Path to created log file
-        
-    Raises:
-        OSError: If logging setup fails
     """
     log_config = {}
     
@@ -258,24 +395,25 @@ def configure_from_globals(globals_config: Dict[str, Any], execution_name: Optio
     if "log_format" in globals_config:
         log_config["log_format"] = globals_config["log_format"]
     
-    return setup_logging(log_config, execution_name)
+    execution_name = execution_name or "datapy_execution"
+    return start_execution(execution_name, log_config)
 
 
-def reset_session():
+def reset_logging():
     """
-    Reset session state for testing or new execution contexts.
+    Reset logging state for testing.
     
-    Warning: This should only be used in testing or when starting
-    a completely new execution context.
+    Warning: This should only be used in testing.
     """
-    global _session_id, _session_log_file, _loggers_configured
+    global _current_context
     
-    with _session_lock:
-        _session_id = None
-        _session_log_file = None
-        _loggers_configured = False
+    with _context_lock:
+        if _current_context:
+            _current_context.finalize()
+        _current_context = None
         
         # Clear all handlers from root logger
         root_logger = logging.getLogger()
         for handler in root_logger.handlers[:]:
+            handler.close()
             root_logger.removeHandler(handler)
