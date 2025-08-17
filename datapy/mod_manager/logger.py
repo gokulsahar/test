@@ -114,8 +114,8 @@ class DataPyFormatter(logging.Formatter):
             })
         
         # Add mod-specific context if available
-        if hasattr(record, 'mod_name'):
-            log_entry["mod_name"] = record.mod_name
+        if hasattr(record, 'mod_type'):
+            log_entry["mod_type"] = record.mod_type
         if hasattr(record, 'mod_instance'):
             log_entry["mod_instance"] = record.mod_instance
         if hasattr(record, 'run_id'):
@@ -131,7 +131,7 @@ class DataPyFormatter(logging.Formatter):
                 'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
                 'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
                 'relativeCreated', 'thread', 'threadName', 'processName', 
-                'process', 'stack_info', 'exc_info', 'exc_text', 'mod_name', 
+                'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
                 'mod_instance', 'run_id'
             }:
                 log_entry[key] = value
@@ -149,8 +149,8 @@ class DataPyConsoleFormatter(logging.Formatter):
         
         # Add mod context if available
         context_parts = []
-        if hasattr(record, 'mod_name'):
-            mod_context = record.mod_name
+        if hasattr(record, 'mod_type'):
+            mod_context = record.mod_type
             if hasattr(record, 'mod_instance'):
                 mod_context += f"#{record.mod_instance}"
             context_parts.append(mod_context)
@@ -299,13 +299,13 @@ def finalize_execution() -> Optional[str]:
         return final_path
 
 
-def setup_logger(name: str, mod_name: Optional[str] = None) -> logging.Logger:
+def setup_logger(name: str, mod_type: Optional[str] = None) -> logging.Logger:
     """
     Setup a logger for a specific component with DataPy context.
     
     Args:
         name: Logger name (typically __name__)
-        mod_name: Name of the mod using this logger
+        mod_type: Type of the mod using this logger (e.g., "csv_reader")
         
     Returns:
         Configured logger instance
@@ -313,15 +313,15 @@ def setup_logger(name: str, mod_name: Optional[str] = None) -> logging.Logger:
     logger = logging.getLogger(name)
     
     # Add mod context to all log records from this logger
-    if mod_name:
+    if mod_type:
         # Get mod instance number from current context
         context = get_current_context()
         mod_instance = context.get_next_mod_instance() if context else "000"
-        run_id = f"{mod_name}_{mod_instance}_{uuid.uuid4().hex[:8]}"
+        run_id = f"{mod_type}_{mod_instance}_{uuid.uuid4().hex[:8]}"
         
         # Create a custom filter to add context
         def add_context(record):
-            record.mod_name = mod_name
+            record.mod_type = mod_type
             record.mod_instance = mod_instance
             record.run_id = run_id
             return True

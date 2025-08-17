@@ -2,7 +2,7 @@
 ModResult class for standardized output format across all DataPy mods.
 
 Provides consistent result handling, metrics collection, and error reporting
-for both CLI and Python SDK usage patterns.
+for both CLI and Python SDK usage patterns with mod name/type tracking.
 """
 
 from typing import Dict, List, Optional, Any, Union
@@ -26,31 +26,36 @@ class ModResult:
     Standardized result container for mod execution outputs.
     
     Provides consistent interface for collecting metrics, warnings, errors,
-    artifacts, and shared state across all framework components.
+    artifacts, and shared state across all framework components with
+    mod identification tracking.
     
     Thread-safe: Each instance is independent and designed for single-mod execution.
     """
     
-    def __init__(self, mod_name: str) -> None:
+    def __init__(self, mod_type: str, mod_name: str) -> None:
         """
         Initialize a new mod result container.
         
         Args:
-            mod_name: Name of the mod being executed
+            mod_type: Type of mod being executed (e.g., "csv_reader")
+            mod_name: Unique name for this mod instance (e.g., "customer_data")
             
         Raises:
-            ValueError: If mod_name is empty or None
+            ValueError: If mod_type or mod_name is empty or None
         """
+        if not mod_type or not isinstance(mod_type, str):
+            raise ValueError("mod_type must be a non-empty string")
         if not mod_name or not isinstance(mod_name, str):
             raise ValueError("mod_name must be a non-empty string")
             
+        self.mod_type = mod_type
         self.mod_name = mod_name
         self.start_time = time.time()
-        self.run_id = f"{mod_name}_{uuid.uuid4().hex[:8]}"
+        self.run_id = f"{mod_type}_{uuid.uuid4().hex[:8]}"
         self.warnings: List[str] = []
         self.errors: List[Dict[str, Union[str, int]]] = []
         self.metrics: Dict[str, Any] = {}
-        self.artifacts: Dict[str, str] = {}
+        self.artifacts: Dict[str, Any] = {}
         self.globals: Dict[str, Any] = {}
     
     def add_warning(self, message: str) -> None:
@@ -88,16 +93,22 @@ class ModResult:
         if key:
             self.metrics[str(key)] = value
     
-    def add_artifact(self, key: str, path: str) -> None:
+    def add_artifact(self, key: str, value: Any) -> None:
         """
-        Add an artifact path to the result.
+        Add an artifact to the result.
+        
+        Mods can store any type of artifact - the framework doesn't enforce types.
+        Common patterns:
+        - inmemory: DataFrames, lists, dicts, objects
+        - file: File paths as strings
+        - uri: Database connections, S3 URIs, API endpoints as strings
         
         Args:
             key: Artifact identifier
-            path: File path to the artifact
+            value: Artifact value (can be any type - inmemory objects, file paths, URIs, etc.)
         """
-        if key and path:
-            self.artifacts[str(key)] = str(path)
+        if key:
+            self.artifacts[str(key)] = value
     
     def add_global(self, key: str, value: Any) -> None:
         """
@@ -157,6 +168,8 @@ class ModResult:
         execution_time = time.time() - self.start_time
         
         # Validation: ensure we have required fields
+        if not self.mod_type:
+            raise ValueError("mod_type cannot be empty")
         if not self.mod_name:
             raise ValueError("mod_name cannot be empty")
         if not self.run_id:
@@ -175,6 +188,7 @@ class ModResult:
             "errors": self.errors.copy(),
             "logs": {
                 "run_id": self.run_id,
+                "mod_type": self.mod_type,
                 "mod_name": self.mod_name
             }
         }
@@ -189,20 +203,20 @@ class ModResult:
 # Convenience functions for common exit codes
 def validation_error(mod_name: str, message: str) -> Dict[str, Any]:
     """Create a validation error result."""
-    result = ModResult(mod_name)
+    result = ModResult("unknown", mod_name)
     result.add_error(message, VALIDATION_ERROR)
     return result.error(VALIDATION_ERROR)
 
 
 def runtime_error(mod_name: str, message: str) -> Dict[str, Any]:
     """Create a runtime error result."""
-    result = ModResult(mod_name)
+    result = ModResult("unknown", mod_name)
     result.add_error(message, RUNTIME_ERROR)
     return result.error(RUNTIME_ERROR)
 
 
 def timeout_error(mod_name: str, message: str) -> Dict[str, Any]:
     """Create a timeout error result."""
-    result = ModResult(mod_name)
+    result = ModResult("unknown", mod_name)
     result.add_error(message, TIMEOUT)
     return result.error(TIMEOUT)

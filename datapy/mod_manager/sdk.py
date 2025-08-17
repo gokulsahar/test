@@ -149,39 +149,59 @@ def _resolve_mod_path(mod_identifier: str) -> str:
     raise ImportError(f"Mod '{mod_identifier}' not found in standard locations: {search_paths}")
 
 
-def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> int:
     """
-    Execute a DataPy mod with automatic context management and parameter resolution.
+    Execute a DataPy mod and inject result into caller's namespace as a variable.
     
     This function automatically handles logging setup, parameter resolution,
-    and execution context management. Users can simply call run_mod() without
-    worrying about context setup.
+    execution context management, and creates a variable with the mod result.
     
     Args:
         mod_path: Module path (e.g., "datapy.mods.sources.csv_reader") 
                  or just mod name (e.g., "csv_reader")
         params: Parameters dictionary for the mod
+        mod_name: Variable name for storing the result (required, must be valid Python identifier)
         
     Returns:
-        Standardized mod result dictionary
+        Exit code (0=success, 10=warning, 20+=error)
         
     Example:
-        # Simple usage - no context management needed
-        result = run_mod("csv_reader", {"input_path": "data.csv"})
-        
-        # Multiple mods - all go to same log file
-        result1 = run_mod("csv_reader", {"input_path": "data.csv"})
-        result2 = run_mod("data_cleaner", {"strategy": "drop"})
+        # Variable assignment pattern
+        exit_code = run_mod("csv_reader", {"input_path": "data.csv"}, "customer_data")
+        if exit_code == 0:
+            print(f"Processed {customer_data['metrics']['rows_processed']} rows")
+            
+        # Multiple mods with unique names
+        run_mod("csv_reader", {"input_path": "data.csv"}, "raw_data")
+        run_mod("data_cleaner", {"strategy": "drop"}, "clean_data")
+        run_mod("csv_reader", {"input_path": "backup.csv"}, "backup_data")
     """
+    # Validate mod_name
+    if not _validate_mod_name(mod_name):
+        logger.error(f"Invalid mod_name '{mod_name}': must be valid Python identifier")
+        return 20  # VALIDATION_ERROR
+    
+    # Check for variable conflicts in caller's namespace
+    if not _check_variable_safety(mod_name):
+        logger.error(f"mod_name '{mod_name}' would overwrite existing variable")
+        return 20  # VALIDATION_ERROR
+    
     # Ensure execution context exists (auto-start if needed)
     _ensure_execution_context()
+    
+    # Check for uniqueness within current execution
+    if not _check_execution_uniqueness(mod_name):
+        logger.error(f"mod_name '{mod_name}' already used in this execution")
+        return 20  # VALIDATION_ERROR
     
     try:
         # Resolve mod path if just name provided
         resolved_mod_path = _resolve_mod_path(mod_path)
-        mod_name = resolved_mod_path.split('.')[-1]
+        mod_type = resolved_mod_path.split('.')[-1]
     except ImportError as e:
-        return validation_error(mod_path, str(e))
+        result = validation_error(mod_name, str(e))
+        _inject_variable(mod_name, result)
+        return result['exit_code']
     
     try:
         # Dynamic module loading
@@ -189,29 +209,41 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         
         # Validate required components exist
         if not hasattr(mod_module, 'run'):
-            return validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'run' function")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'run' function")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         if not hasattr(mod_module, 'METADATA'):
-            return validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'METADATA'")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'METADATA'")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         if not hasattr(mod_module, 'Params'):
-            return validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'Params' class")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'Params' class")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         # Validate metadata
         metadata = mod_module.METADATA
         if not isinstance(metadata, ModMetadata):
-            return validation_error(mod_name, f"Mod {resolved_mod_path} METADATA must be ModMetadata instance")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} METADATA must be ModMetadata instance")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         # Validate Params class inheritance
         params_class = mod_module.Params
         if not issubclass(params_class, BaseModParams):
-            return validation_error(mod_name, f"Mod {resolved_mod_path} Params must inherit from BaseModParams")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} Params must inherit from BaseModParams")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         # Validate run function signature
         run_func = mod_module.run
         sig = inspect.signature(run_func)
         if len(sig.parameters) != 1:
-            return validation_error(mod_name, f"Mod {resolved_mod_path} run function must accept exactly one parameter")
+            result = validation_error(mod_name, f"Mod {resolved_mod_path} run function must accept exactly one parameter")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         # Parameter resolution
         resolver = create_resolver()
@@ -226,7 +258,7 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         
         # Resolve parameters using inheritance chain
         resolved_params = resolver.resolve_mod_params(
-            mod_name=mod_name,
+            mod_name=mod_type,  # Use mod_type for parameter resolution
             job_params=params,
             mod_defaults=mod_defaults,
             globals_override=_global_config
@@ -236,10 +268,12 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         try:
             param_instance = params_class(_metadata=metadata, **resolved_params)
         except Exception as e:
-            return validation_error(mod_name, f"Parameter validation failed: {e}")
+            result = validation_error(mod_name, f"Parameter validation failed: {e}")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
         
         # Setup mod-specific logger (this gets the next mod instance automatically)
-        mod_logger = setup_logger(f"{resolved_mod_path}.execution", mod_name=mod_name)
+        mod_logger = setup_logger(f"{resolved_mod_path}.execution", mod_type=mod_type)
         mod_logger.info(f"Starting mod execution", extra={"params": resolved_params})
         
         # Execute the mod
@@ -248,15 +282,25 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
             
             # Validate result format
             if not isinstance(result, dict):
-                return runtime_error(mod_name, f"Mod {resolved_mod_path} must return a dictionary")
+                result = runtime_error(mod_name, f"Mod {resolved_mod_path} must return a dictionary")
+                _inject_variable(mod_name, result)
+                return result['exit_code']
             
             required_fields = ['status', 'execution_time', 'exit_code', 'metrics', 'artifacts', 'globals', 'warnings', 'errors', 'logs']
             missing_fields = [field for field in required_fields if field not in result]
             if missing_fields:
-                return runtime_error(mod_name, f"Mod {resolved_mod_path} result missing required fields: {missing_fields}")
+                result = runtime_error(mod_name, f"Mod {resolved_mod_path} result missing required fields: {missing_fields}")
+                _inject_variable(mod_name, result)
+                return result['exit_code']
             
             if result['status'] not in ('success', 'warning', 'error'):
-                return runtime_error(mod_name, f"Mod {resolved_mod_path} returned invalid status: {result['status']}")
+                result = runtime_error(mod_name, f"Mod {resolved_mod_path} returned invalid status: {result['status']}")
+                _inject_variable(mod_name, result)
+                return result['exit_code']
+            
+            # Update result with mod identification
+            result['logs']['mod_name'] = mod_name
+            result['logs']['mod_type'] = mod_type
             
             mod_logger.info(f"Mod execution completed", extra={
                 "status": result['status'],
@@ -264,34 +308,131 @@ def run_mod(mod_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
                 "exit_code": result['exit_code']
             })
             
-            return result
+            # Inject result into caller's namespace
+            _inject_variable(mod_name, result)
+            return result['exit_code']
             
         except Exception as e:
             mod_logger.error(f"Mod execution failed: {e}", exc_info=True)
-            return runtime_error(mod_name, f"Mod execution failed: {e}")
+            result = runtime_error(mod_name, f"Mod execution failed: {e}")
+            _inject_variable(mod_name, result)
+            return result['exit_code']
     
     except ImportError as e:
-        return validation_error(mod_name, f"Cannot import mod {resolved_mod_path}: {e}")
+        result = validation_error(mod_name, f"Cannot import mod {resolved_mod_path}: {e}")
+        _inject_variable(mod_name, result)
+        return result['exit_code']
     except Exception as e:
-        return runtime_error(mod_name, f"Unexpected error loading mod {resolved_mod_path}: {e}")
+        result = runtime_error(mod_name, f"Unexpected error loading mod {resolved_mod_path}: {e}")
+        _inject_variable(mod_name, result)
+        return result['exit_code']
 
 
-def clear_global_config() -> None:
+def _validate_mod_name(mod_name: str) -> bool:
     """
-    Clear global configuration (primarily for testing).
+    Validate mod_name is a valid Python identifier.
     
-    Warning: This will reset all global settings.
-    """
-    global _global_config, _auto_context_started
-    _global_config.clear()
-    _auto_context_started = False
-
-
-def is_auto_context_active() -> bool:
-    """
-    Check if auto-context management is active.
-    
+    Args:
+        mod_name: Proposed variable name
+        
     Returns:
-        True if SDK auto-started the execution context
+        True if valid, False otherwise
     """
-    return _auto_context_started
+    if not isinstance(mod_name, str):
+        return False
+    
+    # Check if it's a valid Python identifier
+    if not mod_name.isidentifier():
+        return False
+    
+    # Check against Python keywords
+    import keyword
+    if keyword.iskeyword(mod_name):
+        return False
+    
+    # Check against common builtins to avoid conflicts
+    dangerous_names = {
+        'print', 'len', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
+        'range', 'open', 'file', 'input', 'output', 'type', 'object', 'class',
+        'import', 'from', 'as', 'with', 'try', 'except', 'finally', 'raise',
+        'def', 'return', 'yield', 'lambda', 'global', 'nonlocal', 'locals', 'globals'
+    }
+    
+    if mod_name in dangerous_names:
+        return False
+    
+    return True
+
+
+def _check_variable_safety(mod_name: str) -> bool:
+    """
+    Check if creating this variable would overwrite something important.
+    
+    Args:
+        mod_name: Proposed variable name
+        
+    Returns:
+        True if safe to create, False if would overwrite
+    """
+    # Get caller's frame (two levels up: _check_variable_safety <- run_mod <- user_code)
+    frame = inspect.currentframe().f_back.f_back
+    
+    try:
+        # Check if variable already exists in caller's namespace
+        if mod_name in frame.f_globals:
+            existing = frame.f_globals[mod_name]
+            # Allow overwriting previous mod results (dict with 'status' key)
+            if isinstance(existing, dict) and 'status' in existing:
+                return True
+            else:
+                logger.warning(f"Variable '{mod_name}' already exists and is not a mod result")
+                return False
+        
+        return True
+    finally:
+        del frame
+
+
+def _check_execution_uniqueness(mod_name: str) -> bool:
+    """
+    Check if mod_name is unique within current execution.
+    
+    Args:
+        mod_name: Proposed mod name
+        
+    Returns:
+        True if unique, False if already used
+    """
+    context = get_current_context()
+    if context is None:
+        return True
+    
+    # Store used mod names in context
+    if not hasattr(context, 'used_mod_names'):
+        context.used_mod_names = set()
+    
+    if mod_name in context.used_mod_names:
+        return False
+    
+    context.used_mod_names.add(mod_name)
+    return True
+
+
+def _inject_variable(mod_name: str, result: Dict[str, Any]) -> None:
+    """
+    Inject result into caller's namespace as a variable.
+    
+    Args:
+        mod_name: Variable name to create
+        result: Mod result dictionary to store
+    """
+    # Get caller's frame (two levels up: _inject_variable <- run_mod <- user_code)
+    frame = inspect.currentframe().f_back.f_back
+    
+    try:
+        frame.f_globals[mod_name] = result
+        logger.debug(f"Injected mod result into variable '{mod_name}'")
+    except Exception as e:
+        logger.error(f"Failed to inject variable '{mod_name}': {e}")
+    finally:
+        del frame

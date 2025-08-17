@@ -12,10 +12,30 @@ import re
 class ModMetadata(BaseModel):
     """
     Required metadata for all DataPy mods.
+    
+    Note: The unique mod name (instance identifier) is provided at runtime
+    by the user, not stored in metadata.
     """
-    name: str = Field(..., description="Mod name")
-    version: str = Field(..., description="Mod version (semver)")
+    type: str = Field(..., description="Mod type identifier (e.g., 'csv_reader')")
+    version: str = Field(..., description="Mod version (semver format)")
     description: str = Field(..., description="Mod description")
+    
+    @field_validator('type')
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        """Validate type follows naming conventions."""
+        if not v:
+            raise ValueError("type cannot be empty")
+        
+        # Must be valid Python identifier (for import paths)
+        if not v.replace('_', 'a').isidentifier():
+            raise ValueError("type must be a valid identifier (use underscores, not spaces)")
+        
+        # Recommend lowercase with underscores
+        if v != v.lower():
+            raise ValueError("type should be lowercase with underscores (e.g., 'csv_reader')")
+            
+        return v
     
     @field_validator('version')
     @classmethod
@@ -31,6 +51,9 @@ class ModMetadata(BaseModel):
 class BaseModParams(BaseModel):
     """
     Base parameter class that all mod parameter classes must inherit from.
+    
+    Enforces required metadata and provides consistent parameter validation
+    across all mods in the framework.
     """
     _metadata: ModMetadata = Field(..., description="Required mod metadata")
     
