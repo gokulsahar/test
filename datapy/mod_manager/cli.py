@@ -1,8 +1,9 @@
 """
 Click-based CLI runner for DataPy framework.
 
-Provides command-line interface for executing mods and Python scripts
-with parameter resolution and structured logging using execution context management.
+Provides command-line interface for executing mods and Python scripts.
+CLI is a simple wrapper around the SDK that handles argument parsing,
+config loading, and result formatting.
 """
 
 import json
@@ -57,6 +58,112 @@ def run_mod_command(ctx: click.Context, mod_path: str, params: Optional[str], ex
     log_level = ctx.obj.get('log_level')
     
     try:
+        # Load job configuration
+        config = load_job_config(job_config)
+        globals_config = config.get('globals', {})
+        mods_config = config.get('mods', {})
+        
+        # Validate new YAML format
+        for mod_name, mod_config in mods_config.items():
+            if not isinstance(mod_config, dict) or '_type' not in mod_config:
+                click.echo(f"Error: Mod '{mod_name}' missing required '_type' field", err=True)
+                click.echo("New format: mod_name: { _type: mod_type, param1: value1, ... }", err=True)
+                sys.exit(20)  # VALIDATION_ERROR
+        
+        # Override log level if specified
+        if log_level:
+            globals_config['log_level'] = log_level
+        
+        execution_name = Path(job_config).stem
+        
+        if not quiet:
+            click.echo(f"Executing job: {job_config}")
+            click.echo(f"Mods to execute: {list(mods_config.keys())}")
+        
+        # Use execution context manager for proper logging lifecycle
+        with execution_logger(execution_name, globals_config) as exec_ctx:
+            # Set global config for SDK
+            set_global_config(globals_config)
+            
+            results = []
+            failed = False
+            
+            # Execute each mod in sequence
+            for mod_name, mod_config in mods_config.items():
+                mod_type = mod_config.pop('_type')  # Extract mod type
+                mod_params = mod_config  # Remaining params
+                
+                if not quiet:
+                    click.echo(f"\n--- Executing mod: {mod_name} (type: {mod_type}) ---")
+                
+                try:
+                    # Call SDK (CLI automatically gets full result dict)
+                    result = run_mod(mod_type, mod_params, mod_name=mod_name)
+                    results.append({
+                        "mod_name": mod_name,
+                        "mod_type": mod_type,
+                        "result": result
+                    })
+                    
+                    if not quiet:
+                        click.echo(f"Mod {mod_name} completed with status: {result['status']}")
+                    
+                    # Check for failure
+                    if result['status'] == 'error':
+                        failed = True
+                        if exit_on_error:
+                            click.echo(f"Job failed at mod: {mod_name}", err=True)
+                            break
+                            
+                except Exception as e:
+                    click.echo(f"Error executing mod {mod_name}: {e}", err=True)
+                    failed = True
+                    if exit_on_error:
+                        break
+            
+            # Output final results
+            if quiet:
+                if failed:
+                    click.echo("error")
+                else:
+                    click.echo("success")
+            else:
+                click.echo("\n--- Job Execution Summary ---")
+                click.echo(json.dumps({
+                    "job_config": job_config,
+                    "execution_id": exec_ctx.execution_id,
+                    "total_mods": len(mods_config),
+                    "executed_mods": len(results),
+                    "failed": failed,
+                    "results": results
+                }, indent=2))
+            
+            # Handle exit code
+            if failed and exit_on_error:
+                sys.exit(30)  # RUNTIME_ERROR
+            elif failed:
+                sys.exit(10)  # SUCCESS_WITH_WARNINGS
+            else:
+                sys.exit(0)   # SUCCESS
+                
+    except Exception as e:
+        click.echo(f"Job execution failed: {e}", err=True)
+        if not quiet:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+        sys.exit(30)  # RUNTIME_ERROR
+
+
+def main() -> None:
+    """Main entry point for CLI."""
+    cli()
+
+
+if __name__ == '__main__':
+    main())
+    log_level = ctx.obj.get('log_level')
+    
+    try:
         # Load parameters from file
         job_params = {}
         globals_config = {}
@@ -87,8 +194,8 @@ def run_mod_command(ctx: click.Context, mod_path: str, params: Optional[str], ex
             # Set global config for SDK
             set_global_config(globals_config)
             
-            # Execute the mod
-            result = run_mod(mod_path, job_params)
+            # Execute the mod (CLI automatically gets full result dict)
+            result = run_mod(mod_path, job_params, mod_name=execution_name)
             
             # Output results
             if quiet:
@@ -245,105 +352,16 @@ def run_job_command(ctx: click.Context, job_config: str, exit_on_error: bool) ->
           base_path: "/data/2024-08-12"
         
         mods:
-          csv_reader:
+          customer_data:        # Unique mod name (variable identifier)
+            _type: csv_reader   # Mod type to execute
             input_path: "customers.csv"
-          data_cleaner:
+          clean_data:
+            _type: data_cleaner
+            input_data: "${customer_data.artifacts.output_file}"  # Reference previous mod
             strategy: "drop"
-          database_writer:
+          final_output:
+            _type: database_writer
+            input_data: "${clean_data.artifacts.output_file}"
             table_name: "customers"
     """
-    quiet = ctx.obj.get('quiet', False)
-    log_level = ctx.obj.get('log_level')
-    
-    try:
-        # Load job configuration
-        config = load_job_config(job_config)
-        globals_config = config.get('globals', {})
-        mods_config = config.get('mods', {})
-        
-        # Override log level if specified
-        if log_level:
-            globals_config['log_level'] = log_level
-        
-        execution_name = Path(job_config).stem
-        
-        if not quiet:
-            click.echo(f"Executing job: {job_config}")
-            click.echo(f"Mods to execute: {list(mods_config.keys())}")
-        
-        # Use execution context manager for proper logging lifecycle
-        with execution_logger(execution_name, globals_config) as exec_ctx:
-            # Set global config for SDK
-            set_global_config(globals_config)
-            
-            results = []
-            failed = False
-            
-            # Execute each mod in sequence
-            for mod_name, mod_params in mods_config.items():
-                if not quiet:
-                    click.echo(f"\n--- Executing mod: {mod_name} ---")
-                
-                try:
-                    result = run_mod(mod_name, mod_params)
-                    results.append({
-                        "mod": mod_name,
-                        "result": result
-                    })
-                    
-                    if not quiet:
-                        click.echo(f"Mod {mod_name} completed with status: {result['status']}")
-                    
-                    # Check for failure
-                    if result['status'] == 'error':
-                        failed = True
-                        if exit_on_error:
-                            click.echo(f"Job failed at mod: {mod_name}", err=True)
-                            break
-                            
-                except Exception as e:
-                    click.echo(f"Error executing mod {mod_name}: {e}", err=True)
-                    failed = True
-                    if exit_on_error:
-                        break
-            
-            # Output final results
-            if quiet:
-                if failed:
-                    click.echo("error")
-                else:
-                    click.echo("success")
-            else:
-                click.echo("\n--- Job Execution Summary ---")
-                click.echo(json.dumps({
-                    "job_config": job_config,
-                    "execution_id": exec_ctx.execution_id,
-                    "total_mods": len(mods_config),
-                    "executed_mods": len(results),
-                    "failed": failed,
-                    "results": results
-                }, indent=2))
-            
-            # Handle exit code
-            if failed and exit_on_error:
-                sys.exit(30)  # RUNTIME_ERROR
-            elif failed:
-                sys.exit(10)  # SUCCESS_WITH_WARNINGS
-            else:
-                sys.exit(0)   # SUCCESS
-                
-    except Exception as e:
-        click.echo(f"Job execution failed: {e}", err=True)
-        if not quiet:
-            import traceback
-            click.echo(traceback.format_exc(), err=True)
-        sys.exit(30)  # RUNTIME_ERROR
-
-
-def main() -> None:
-    """Main entry point for CLI."""
-    cli()
-
-
-if __name__ == '__main__':
-    main()
+    quiet = ctx.obj.get('quiet', False
