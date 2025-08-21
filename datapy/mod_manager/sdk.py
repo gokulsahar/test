@@ -21,6 +21,7 @@ _auto_context_started: bool = False
 
 logger = setup_logger(__name__)
 
+#Global config functions
 
 def set_global_config(config: Dict[str, Any]) -> None:
     """
@@ -51,6 +52,24 @@ def get_global_config() -> Dict[str, Any]:
     """
     return _global_config.copy()
 
+
+def clear_global_config() -> None:
+    """
+    Clear global configuration (primarily for testing).
+    
+    Warning: This will reset all global settings and execution context.
+    """
+    global _global_config, _auto_context_started
+    _global_config.clear()
+    _auto_context_started = False
+    
+    # Clear execution context if it exists
+    context = get_current_context()
+    if context and hasattr(context, 'used_mod_names'):
+        context.used_mod_names.clear()
+
+
+#context detection
 
 def _detect_script_name() -> str:
     """
@@ -129,6 +148,8 @@ def _ensure_execution_context() -> None:
         
         logger.info(f"Auto-started execution context for script: {script_name}")
 
+
+#mod resolution, validation & var injection
 
 def _resolve_mod_path(mod_identifier: str) -> str:
     """
@@ -284,6 +305,9 @@ def _inject_variable(mod_name: str, result: Dict[str, Any]) -> None:
         logger.error(f"Failed to inject variable '{mod_name}': {e}")
     finally:
         del frame
+
+
+#executor
 
 
 def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, Dict[str, Any]]:
@@ -522,21 +546,7 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
             return error_result['exit_code']
 
 
-def clear_global_config() -> None:
-    """
-    Clear global configuration (primarily for testing).
-    
-    Warning: This will reset all global settings and execution context.
-    """
-    global _global_config, _auto_context_started
-    _global_config.clear()
-    _auto_context_started = False
-    
-    # Clear execution context if it exists
-    context = get_current_context()
-    if context and hasattr(context, 'used_mod_names'):
-        context.used_mod_names.clear()
-
+#utils
 
 def is_auto_context_active() -> bool:
     """

@@ -28,8 +28,6 @@ class ModResult:
     Provides consistent interface for collecting metrics, warnings, errors,
     artifacts, and shared state across all framework components with
     mod identification tracking.
-    
-    Thread-safe: Each instance is independent and designed for single-mod execution.
     """
     
     def __init__(self, mod_type: str, mod_name: str) -> None:
