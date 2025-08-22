@@ -240,7 +240,7 @@ class ModRegistry:
             filtered_mods = []
             for mod_type in mods:
                 mod_info = self.registry_data['mods'][mod_type]
-                mod_category = mod_info.get('metadata', {}).get('category', '')
+                mod_category = mod_info.get('category', '')
                 if mod_category == category:
                     filtered_mods.append(mod_type)
             return filtered_mods
@@ -249,7 +249,7 @@ class ModRegistry:
     
     def register_mod(self, module_path: str) -> bool:
         """
-        Register a new mod in the registry.
+        Register a new mod in the registry with complete metadata extraction.
         
         Args:
             module_path: Full module path to the mod
@@ -266,35 +266,64 @@ class ModRegistry:
         
         module_path = module_path.strip()
         
-        # Validate mod structure
+        # Import and validate mod structure
         try:
             mod_module = importlib.import_module(module_path)
         except ImportError as e:
             raise ValueError(f"Cannot import mod {module_path}: {e}")
         
+        # Validate mod has required components
         if not hasattr(mod_module, 'run'):
             raise ValueError(f"Mod {module_path} missing required 'run' function")
+        
+        if not hasattr(mod_module, 'METADATA'):
+            raise ValueError(f"Mod {module_path} missing required 'METADATA'")
+        
+        if not hasattr(mod_module, 'CONFIG_SCHEMA'):
+            raise ValueError(f"Mod {module_path} missing required 'CONFIG_SCHEMA'")
         
         run_func = mod_module.run
         if not callable(run_func):
             raise ValueError(f"Mod {module_path} 'run' must be callable")
         
-        # Extract mod type from module path
-        mod_type = module_path.split('.')[-1]
+        # Extract and validate metadata
+        try:
+            metadata = mod_module.METADATA
+            config_schema = mod_module.CONFIG_SCHEMA
+            
+            # Validate metadata is proper type
+            from .base import ModMetadata, ConfigSchema
+            if not isinstance(metadata, ModMetadata):
+                raise ValueError(f"METADATA must be ModMetadata instance, got {type(metadata)}")
+            
+            if not isinstance(config_schema, ConfigSchema):
+                raise ValueError(f"CONFIG_SCHEMA must be ConfigSchema instance, got {type(config_schema)}")
+                
+        except Exception as e:
+            raise ValueError(f"Invalid metadata in {module_path}: {e}")
+        
+        # Extract mod type from metadata (not module path)
+        mod_type = metadata.type
         
         # Check if already registered
         if mod_type in self.registry_data['mods']:
-            raise ValueError(f"Mod '{mod_type}' already registered")
+            raise ValueError(f"Mod type '{mod_type}' already registered")
         
-        # Create registry entry
+        # Create registry entry with complete metadata
         registry_entry = {
             "module_path": module_path,
-            "metadata": {
-                "type": mod_type,
-                "version": "1.0.0",
-                "description": f"Auto-registered mod: {mod_type}",
-                "category": self._guess_category(module_path),
-                "author": "DataPy User"
+            "type": metadata.type,
+            "version": metadata.version,
+            "description": metadata.description,
+            "category": metadata.category,
+            "input_ports": metadata.input_ports,
+            "output_ports": metadata.output_ports,
+            "globals": metadata.globals,
+            "packages": metadata.packages,
+            "python_version": metadata.python_version,
+            "config_schema": {
+                "required": config_schema.required,
+                "optional": config_schema.optional
             },
             "registered_at": datetime.now().isoformat()
         }
@@ -309,7 +338,7 @@ class ModRegistry:
         return True
     
     def _guess_category(self, module_path: str) -> str:
-        """Guess mod category from module path."""
+        """Guess mod category from module path (deprecated - use metadata.category)."""
         if '.sources.' in module_path:
             return 'sources'
         elif '.transformers.' in module_path:
@@ -321,9 +350,42 @@ class ModRegistry:
         else:
             return 'unknown'
     
+    def validate_params_schema(self, mod_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate parameters against mod's config schema.
+        
+        Args:
+            mod_type: Type of mod to validate against
+            params: Parameters to validate
+            
+        Returns:
+            Validated parameters with defaults applied
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        mod_info = self.get_mod_info(mod_type)
+        config_schema = mod_info.get('config_schema', {})
+        
+        validated_params = params.copy()
+        
+        # Check required parameters
+        required_params = config_schema.get('required', {})
+        for param_name, param_def in required_params.items():
+            if param_name not in validated_params:
+                raise ValueError(f"Missing required parameter: {param_name}")
+        
+        # Apply defaults for optional parameters
+        optional_params = config_schema.get('optional', {})
+        for param_name, param_def in optional_params.items():
+            if param_name not in validated_params and 'default' in param_def:
+                validated_params[param_name] = param_def['default']
+        
+        return validated_params
+    
     def validate_registry(self) -> List[str]:
         """
-        Validate all mods in registry can be imported and executed.
+        Validate all mods in registry can be imported and have proper structure.
         
         Returns:
             List of validation errors (empty if all valid)
@@ -340,13 +402,34 @@ class ModRegistry:
                 # Try to import mod
                 mod_module = importlib.import_module(module_path)
                 
-                # Check for run function
+                # Check for required components
                 if not hasattr(mod_module, 'run'):
                     errors.append(f"Mod '{mod_type}' missing run() function")
                     continue
                 
                 if not callable(mod_module.run):
                     errors.append(f"Mod '{mod_type}' run is not callable")
+                
+                # Check for metadata components
+                if not hasattr(mod_module, 'METADATA'):
+                    errors.append(f"Mod '{mod_type}' missing METADATA")
+                
+                if not hasattr(mod_module, 'CONFIG_SCHEMA'):
+                    errors.append(f"Mod '{mod_type}' missing CONFIG_SCHEMA")
+                
+                # Validate metadata types if present
+                if hasattr(mod_module, 'METADATA') and hasattr(mod_module, 'CONFIG_SCHEMA'):
+                    try:
+                        from .base import ModMetadata, ConfigSchema
+                        
+                        if not isinstance(mod_module.METADATA, ModMetadata):
+                            errors.append(f"Mod '{mod_type}' METADATA is not ModMetadata instance")
+                        
+                        if not isinstance(mod_module.CONFIG_SCHEMA, ConfigSchema):
+                            errors.append(f"Mod '{mod_type}' CONFIG_SCHEMA is not ConfigSchema instance")
+                            
+                    except Exception as e:
+                        errors.append(f"Mod '{mod_type}' metadata validation failed: {e}")
                 
             except ImportError as e:
                 errors.append(f"Mod '{mod_type}' import failed: {e}")

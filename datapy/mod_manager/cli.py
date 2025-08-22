@@ -460,8 +460,8 @@ def list_registry_command(ctx: click.Context, category: Optional[str]) -> None:
             for mod_type in sorted(mods):
                 try:
                     mod_info = registry.get_mod_info(mod_type)
-                    description = mod_info.get('metadata', {}).get('description', 'No description')
-                    version = mod_info.get('metadata', {}).get('version', 'unknown')
+                    description = mod_info.get('description', 'No description')
+                    version = mod_info.get('version', 'unknown')
                     click.echo(f"  {mod_type} (v{version}) - {description}")
                 except Exception as e:
                     click.echo(f"  {mod_type} - Error loading info: {e}")
@@ -612,10 +612,7 @@ def mod_info_command(ctx: click.Context, mod_type: str) -> None:
             click.echo("error")
         else:
             click.echo(f"Error getting mod info: {e}", err=True)
-        sys.exit(RUNTIME_ERROR)        
-        
-
-
+        sys.exit(RUNTIME_ERROR)
 
 if __name__ == '__main__':
     main()

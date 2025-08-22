@@ -6,23 +6,41 @@ consistent metadata tracking and parameter validation across the framework.
 """
 
 from pydantic import BaseModel, Field, field_validator
+from typing import List, Dict, Any, Optional
 import re
 
 
 class ModMetadata(BaseModel):
     """
-    Required metadata for all DataPy mods.
+    Complete metadata for all DataPy mods.
     
     Example:
         METADATA = ModMetadata(
-            type="csv_reader",
+            type="source",
             version="1.0.0", 
-            description="Reads CSV files with validation and format conversion"
+            description="Reads data from CSV files",
+            category="File Sources",
+            input_ports=[],
+            output_ports=["data"],
+            globals=["row_count", "file_size"],
+            packages=["pandas>=1.5.0", "chardet>=4.0.0"],
+            python_version=">=3.8"
         )
     """
-    type: str = Field(..., description="Mod type identifier (e.g., 'csv_reader')")
+    # Basic metadata
+    type: str = Field(..., description="Mod type identifier (e.g., 'source', 'transformer')")
     version: str = Field(..., description="Mod version (semver format)")
     description: str = Field(..., description="Mod description")
+    category: str = Field(..., description="Mod category (e.g., 'File Sources')")
+    
+    # Data flow metadata
+    input_ports: List[str] = Field(default_factory=list, description="Input port names")
+    output_ports: List[str] = Field(default_factory=list, description="Output port names") 
+    globals: List[str] = Field(default_factory=list, description="Global variables produced by this mod")
+    
+    # Dependency metadata
+    packages: List[str] = Field(default_factory=list, description="Required Python packages")
+    python_version: str = Field(default=">=3.8", description="Required Python version")
     
     @field_validator('type')
     @classmethod
@@ -31,13 +49,10 @@ class ModMetadata(BaseModel):
         if not v or not isinstance(v, str):
             raise ValueError("type cannot be empty")
         
-        # Must be valid Python identifier (for import paths)
-        if not v.replace('_', 'a').isidentifier():
-            raise ValueError("type must be a valid identifier (use underscores, not spaces)")
-        
-        # Recommend lowercase with underscores
-        if v != v.lower():
-            raise ValueError("type should be lowercase with underscores (e.g., 'csv_reader')")
+        # Allow common types: source, transformer, sink, solo
+        valid_types = ['source', 'transformer', 'sink', 'solo']
+        if v not in valid_types:
+            raise ValueError(f"type must be one of: {valid_types}")
             
         return v
     
@@ -62,6 +77,52 @@ class ModMetadata(BaseModel):
         if len(v.strip()) < 10:
             raise ValueError("description should be at least 10 characters")
         return v.strip()
+    
+    @field_validator('category')
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        """Validate category is meaningful."""
+        if not v or not isinstance(v, str):
+            raise ValueError("category cannot be empty")
+        return v.strip()
+
+
+class ConfigSchema(BaseModel):
+    """
+    Configuration schema for mod parameters.
+    
+    Example:
+        CONFIG_SCHEMA = ConfigSchema(
+            required={
+                "file_path": {"type": "str", "description": "Path to CSV file"}
+            },
+            optional={
+                "encoding": {"type": "str", "default": "utf-8", "description": "File encoding"},
+                "delimiter": {"type": "str", "default": ",", "description": "CSV delimiter"}
+            }
+        )
+    """
+    required: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Required parameters")
+    optional: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Optional parameters")
+    
+    @field_validator('required', 'optional')
+    @classmethod
+    def validate_param_schema(cls, v: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Validate parameter schema structure."""
+        if not isinstance(v, dict):
+            raise ValueError("Parameter schema must be a dictionary")
+        
+        for param_name, param_def in v.items():
+            if not isinstance(param_def, dict):
+                raise ValueError(f"Parameter definition for '{param_name}' must be a dictionary")
+            
+            if 'type' not in param_def:
+                raise ValueError(f"Parameter '{param_name}' missing required 'type' field")
+            
+            if 'description' not in param_def:
+                raise ValueError(f"Parameter '{param_name}' missing required 'description' field")
+        
+        return v
 
 
 class BaseModParams(BaseModel):
@@ -73,10 +134,12 @@ class BaseModParams(BaseModel):
     
     Example:
         class Params(BaseModParams):
-            _metadata: ModMetadata = METADATA
+            metadata: ModMetadata = METADATA
+            config_schema: ConfigSchema = CONFIG_SCHEMA
             input_path: str
             delimiter: str = ","
     """
-    _metadata: ModMetadata = Field(..., description="Required mod metadata")
+    metadata: ModMetadata = Field(..., description="Required mod metadata")
+    config_schema: ConfigSchema = Field(..., description="Required configuration schema")
     
     model_config = {"extra": "forbid"}  # Prevent typos in parameter names
