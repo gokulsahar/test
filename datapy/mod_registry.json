@@ -3,7 +3,64 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2024-08-22"
+    "last_updated": "2025-08-22T11:45:33.045998"
   },
-  "mods": {}
+  "mods": {
+    "csv_reader": {
+      "module_path": "datapy.mods.sources.csv_reader",
+      "type": "csv_reader",
+      "version": "1.0.0",
+      "description": "Reads data from CSV files with validation and format conversion",
+      "category": "source",
+      "input_ports": [],
+      "output_ports": [
+        "data"
+      ],
+      "globals": [
+        "row_count",
+        "file_size"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "chardet>=4.0.0"
+      ],
+      "python_version": ">=3.8",
+      "config_schema": {
+        "required": {
+          "file_path": {
+            "type": "str",
+            "description": "Path to CSV file"
+          }
+        },
+        "optional": {
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding",
+            "enum": [
+              "utf-8",
+              "latin-1",
+              "cp1252"
+            ]
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "CSV delimiter character"
+          },
+          "header_row": {
+            "type": "int",
+            "default": 0,
+            "description": "Row number to use as column headers (0-indexed)"
+          },
+          "skip_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of rows to skip at start of file"
+          }
+        }
+      },
+      "registered_at": "2025-08-22T11:45:33.045984"
+    }
+  }
 }

@@ -13,7 +13,7 @@ METADATA = ModMetadata(
     type="csv_reader",
     version="1.0.0",
     description="Reads data from CSV files with validation and format conversion",
-    category="File Sources",
+    category="source",
     input_ports=[],
     output_ports=["data"],
     globals=["row_count", "file_size"],
@@ -71,7 +71,7 @@ def run(params):
     
     # Extract mod information
     mod_name = params.get("_mod_name", "csv_reader")
-    result = ModResult("source", mod_name)
+    result = ModResult("csv_reader", mod_name)
     
     try:
         # Get parameters with defaults (registry handles validation)

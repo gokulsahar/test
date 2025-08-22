@@ -16,10 +16,10 @@ class ModMetadata(BaseModel):
     
     Example:
         METADATA = ModMetadata(
-            type="source",
+            type="csv_reader",
             version="1.0.0", 
             description="Reads data from CSV files",
-            category="File Sources",
+            category="source",
             input_ports=[],
             output_ports=["data"],
             globals=["row_count", "file_size"],
@@ -28,10 +28,10 @@ class ModMetadata(BaseModel):
         )
     """
     # Basic metadata
-    type: str = Field(..., description="Mod type identifier (e.g., 'source', 'transformer')")
+    type: str = Field(..., description="Mod type identifier (e.g., 'csv_reader', 'data_cleaner')")
     version: str = Field(..., description="Mod version (semver format)")
     description: str = Field(..., description="Mod description")
-    category: str = Field(..., description="Mod category (e.g., 'File Sources')")
+    category: str = Field(..., description="Mod category (e.g., 'source', 'transformer')")
     
     # Data flow metadata
     input_ports: List[str] = Field(default_factory=list, description="Input port names")
@@ -45,16 +45,14 @@ class ModMetadata(BaseModel):
     @field_validator('type')
     @classmethod
     def validate_type(cls, v: str) -> str:
-        """Validate type follows naming conventions."""
+        """Validate type is a meaningful string."""
         if not v or not isinstance(v, str):
             raise ValueError("type cannot be empty")
         
-        # Allow common types: source, transformer, sink, solo
-        valid_types = ['source', 'transformer', 'sink', 'solo']
-        if v not in valid_types:
-            raise ValueError(f"type must be one of: {valid_types}")
+        if len(v.strip()) < 2:
+            raise ValueError("type should be at least 2 characters")
             
-        return v
+        return v.strip()
     
     @field_validator('version')
     @classmethod
@@ -81,10 +79,16 @@ class ModMetadata(BaseModel):
     @field_validator('category')
     @classmethod
     def validate_category(cls, v: str) -> str:
-        """Validate category is meaningful."""
+        """Validate category follows framework categories."""
         if not v or not isinstance(v, str):
             raise ValueError("category cannot be empty")
-        return v.strip()
+        
+        # Allow framework categories
+        valid_categories = ['source', 'transformer', 'sink', 'solo']
+        if v not in valid_categories:
+            raise ValueError(f"category must be one of: {valid_categories}")
+            
+        return v
 
 
 class ConfigSchema(BaseModel):
