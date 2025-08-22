@@ -19,7 +19,7 @@ class ModMetadata(BaseModel):
             type="csv_reader",
             version="1.0.0", 
             description="Reads data from CSV files",
-            category="source",
+            category="sources",
             input_ports=[],
             output_ports=["data"],
             globals=["row_count", "file_size"],

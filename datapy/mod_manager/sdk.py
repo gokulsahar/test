@@ -208,45 +208,95 @@ def _add_mod_to_expected_list(state_file_path: str, mod_name: str) -> None:
         logger.warning(f"Failed to add mod {mod_name} to expected list: {e}")
 
 
-def _update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
+def update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
     """
-    Update job state with mod completion.
+    Update state file with mod completion (atomic operation).
     
     Args:
         state_file_path: Path to state file
         mod_name: Name of completed mod
-        status: Completion status
-    """
-    try:
-        from .logger import update_job_state
-        update_job_state(state_file_path, mod_name, status)
-    except Exception as e:
-        logger.error(f"Failed to update job state: {e}")
-
-
-def _validate_mod_execution_inputs(mod_type: str, params: Dict[str, Any], mod_name: str) -> None:
-    """
-    Validate inputs for mod execution.
-    
-    Args:
-        mod_type: Mod type identifier
-        params: Parameters for the mod
-        mod_name: Unique name for this mod instance
+        status: Mod completion status ('success', 'warning', or 'error')
         
     Raises:
-        ValueError: If inputs are invalid
+        RuntimeError: If state update fails
     """
-    if not mod_type or not isinstance(mod_type, str):
-        raise ValueError("mod_type must be a non-empty string")
+    if not state_file_path or not isinstance(state_file_path, str):
+        raise RuntimeError("state_file_path must be a non-empty string")
     
-    if not isinstance(params, dict):
-        raise ValueError("params must be a dictionary")
+    if not mod_name or not isinstance(mod_name, str):
+        raise RuntimeError("mod_name must be a non-empty string")
     
-    if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
-        raise ValueError("mod_name must be a non-empty string")
+    if status not in ('success', 'warning', 'error'):
+        raise RuntimeError(f"Invalid status: {status}. Must be success, warning, or error")
     
-    if not mod_name.strip().isidentifier():
-        raise ValueError(f"mod_name '{mod_name}' must be a valid Python identifier")
+    try:
+        # Read current state
+        if not Path(state_file_path).exists():
+            raise RuntimeError(f"State file does not exist: {state_file_path}")
+        
+        with open(state_file_path, 'r') as f:
+            state = json.load(f)
+        
+        if not isinstance(state, dict):
+            raise RuntimeError(f"Invalid state file format: {state_file_path}")
+        
+        # Update state based on status
+        if status in ('success', 'warning'):
+            if mod_name not in state.get('completed_mods', []):
+                state.setdefault('completed_mods', []).append(mod_name)
+        elif status == 'error':
+            if mod_name not in state.get('failed_mods', []):
+                state.setdefault('failed_mods', []).append(mod_name)
+        
+        # Update metadata
+        state['last_updated'] = datetime.now().isoformat() + "Z"
+        expected_mods = set(state.get('expected_mods', []))
+        completed_mods = set(state.get('completed_mods', []))
+        state['is_complete'] = len(expected_mods) > 0 and expected_mods == completed_mods
+        
+        # Windows-compatible atomic write
+        temp_file = state_file_path + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(state, f, indent=2)
+        
+        # Windows atomic replace pattern
+        if os.path.exists(state_file_path):
+            backup_file = state_file_path + '.backup'
+            if os.path.exists(backup_file):
+                os.unlink(backup_file)
+            os.rename(state_file_path, backup_file)
+            os.rename(temp_file, state_file_path)
+            os.unlink(backup_file)
+        else:
+            os.rename(temp_file, state_file_path)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Updated job state", extra={
+            "mod_name": mod_name,
+            "status": status,
+            "is_complete": state['is_complete']
+        })
+        
+    except json.JSONDecodeError as e:
+        # Handle corrupted state file
+        logger = logging.getLogger(__name__)
+        backup_path = f"{state_file_path}.corrupted.{int(time.time())}"
+        try:
+            shutil.copy2(state_file_path, backup_path)
+            logger.error(f"Corrupted state file backed up to: {backup_path}")
+        except:
+            pass
+        raise RuntimeError(f"Corrupted state file {state_file_path}: {e}")
+    
+    except Exception as e:
+        # Clean up partial files
+        temp_file = state_file_path + '.tmp'
+        try:
+            if Path(temp_file).exists():
+                os.unlink(temp_file)
+        except:
+            pass
+        raise RuntimeError(f"Failed to update state file {state_file_path}: {e}")
 
 
 def _setup_mod_execution_environment(mod_name: str) -> Dict[str, Any]:

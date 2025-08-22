@@ -589,14 +589,28 @@ def mod_info_command(ctx: click.Context, mod_type: str) -> None:
         if quiet:
             click.echo(json.dumps(mod_info, indent=2))
         else:
-            metadata = mod_info.get('metadata', {})
+            # Use direct fields from registry structure (not nested metadata)
             click.echo(f"Mod Information: {mod_type}")
             click.echo("=" * (17 + len(mod_type)))
             click.echo(f"Module Path: {mod_info.get('module_path', 'unknown')}")
-            click.echo(f"Version: {metadata.get('version', 'unknown')}")
-            click.echo(f"Category: {metadata.get('category', 'unknown')}")
-            click.echo(f"Author: {metadata.get('author', 'unknown')}")
-            click.echo(f"Description: {metadata.get('description', 'No description')}")
+            click.echo(f"Version: {mod_info.get('version', 'unknown')}")
+            click.echo(f"Category: {mod_info.get('category', 'unknown')}")
+            click.echo(f"Description: {mod_info.get('description', 'No description')}")
+            
+            # Display data flow information
+            input_ports = mod_info.get('input_ports', [])
+            output_ports = mod_info.get('output_ports', [])
+            globals_list = mod_info.get('globals', [])
+            
+            click.echo(f"Input Ports: {input_ports}")
+            click.echo(f"Output Ports: {output_ports}")
+            click.echo(f"Globals: {globals_list}")
+            
+            # Display dependencies
+            packages = mod_info.get('packages', [])
+            python_version = mod_info.get('python_version', 'unknown')
+            click.echo(f"Packages: {packages}")
+            click.echo(f"Python Version: {python_version}")
             
             if 'registered_at' in mod_info:
                 click.echo(f"Registered: {mod_info['registered_at']}")
