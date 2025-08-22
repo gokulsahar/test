@@ -95,7 +95,7 @@ class ModRegistry:
     
     def _save_registry(self) -> None:
         """
-        Save registry data to JSON file atomically.
+        Save registry data to JSON file atomically (Windows-compatible).
         
         Raises:
             RuntimeError: If registry cannot be saved
@@ -105,12 +105,27 @@ class ModRegistry:
             self.registry_data.setdefault('_metadata', {})
             self.registry_data['_metadata']['last_updated'] = datetime.now().isoformat()
             
-            # Atomic write using temporary file
+            # Atomic write using temporary file (Windows-compatible)
             temp_file = self.registry_path + '.tmp'
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.registry_data, f, indent=2, ensure_ascii=False)
             
-            os.rename(temp_file, self.registry_path)
+            # Windows-compatible atomic replace
+            if os.path.exists(self.registry_path):
+                backup_file = self.registry_path + '.backup'
+                # Remove old backup if exists
+                if os.path.exists(backup_file):
+                    os.unlink(backup_file)
+                # Move current to backup
+                os.rename(self.registry_path, backup_file)
+                # Move temp to current
+                os.rename(temp_file, self.registry_path)
+                # Remove backup
+                os.unlink(backup_file)
+            else:
+                # Simple rename if target doesn't exist
+                os.rename(temp_file, self.registry_path)
+            
             logger.info("Registry saved successfully")
             
         except Exception as e:
