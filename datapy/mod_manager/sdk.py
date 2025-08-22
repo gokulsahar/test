@@ -1,12 +1,10 @@
 """
-Python SDK for DataPy framework with explicit return values.
+Python SDK for DataPy framework with registry-based mod execution.
 
-Provides clean API for mod execution without frame manipulation,
-with state-based logging and future orchestrator support.
+Provides clean API for mod execution with registry lookup,
+state-based logging and future orchestrator support.
 """
 
-import importlib
-import inspect
 import os
 import json
 import time
@@ -19,7 +17,7 @@ from .logger import (
 )
 from .params import create_resolver, load_job_config
 from .result import ModResult, validation_error, runtime_error
-from .base import ModMetadata, BaseModParams
+from .registry import get_registry
 
 # Global configuration storage
 _global_config: Dict[str, Any] = {}
@@ -210,95 +208,6 @@ def _add_mod_to_expected_list(state_file_path: str, mod_name: str) -> None:
         logger.warning(f"Failed to add mod {mod_name} to expected list: {e}")
 
 
-def _resolve_mod_path(mod_identifier: str) -> str:
-    """
-    Resolve mod identifier to full module path.
-    
-    Args:
-        mod_identifier: Mod identifier (short name or full path)
-        
-    Returns:
-        Full module path
-        
-    Raises:
-        ImportError: If mod cannot be found
-    """
-    if not mod_identifier or not isinstance(mod_identifier, str):
-        raise ImportError("mod_identifier must be a non-empty string")
-    
-    # If already a full path, return as-is
-    if '.' in mod_identifier:
-        try:
-            importlib.import_module(mod_identifier)
-            return mod_identifier
-        except ImportError:
-            pass  # Fall through to search
-    
-    # Search in standard locations
-    search_paths = [
-        f"datapy.mods.sources.{mod_identifier}",
-        f"datapy.mods.transformers.{mod_identifier}", 
-        f"datapy.mods.sinks.{mod_identifier}",
-        f"datapy.mods.solos.{mod_identifier}"
-    ]
-    
-    for path in search_paths:
-        try:
-            importlib.import_module(path)
-            logger.debug(f"Resolved mod path", extra={"identifier": mod_identifier, "path": path})
-            return path
-        except ImportError:
-            continue
-    
-    raise ImportError(f"Mod '{mod_identifier}' not found in standard locations: {search_paths}")
-
-
-def _validate_mod_structure(mod_module, mod_path: str) -> Tuple[ModMetadata, type, callable]:
-    """
-    Validate mod has required structure and return components.
-    
-    Args:
-        mod_module: Imported mod module
-        mod_path: Full module path for error messages
-        
-    Returns:
-        Tuple of (metadata, params_class, run_function)
-        
-    Raises:
-        ValueError: If mod structure is invalid
-    """
-    # Check for required components
-    if not hasattr(mod_module, 'run'):
-        raise ValueError(f"Mod {mod_path} missing required 'run' function")
-    
-    if not hasattr(mod_module, 'METADATA'):
-        raise ValueError(f"Mod {mod_path} missing required 'METADATA'")
-    
-    if not hasattr(mod_module, 'Params'):
-        raise ValueError(f"Mod {mod_path} missing required 'Params' class")
-    
-    # Validate metadata
-    metadata = mod_module.METADATA
-    if not isinstance(metadata, ModMetadata):
-        raise ValueError(f"Mod {mod_path} METADATA must be ModMetadata instance")
-    
-    # Validate params class
-    params_class = mod_module.Params
-    if not issubclass(params_class, BaseModParams):
-        raise ValueError(f"Mod {mod_path} Params must inherit from BaseModParams")
-    
-    # Validate run function signature
-    run_func = mod_module.run
-    if not callable(run_func):
-        raise ValueError(f"Mod {mod_path} run must be callable")
-    
-    sig = inspect.signature(run_func)
-    if len(sig.parameters) != 1:
-        raise ValueError(f"Mod {mod_path} run function must accept exactly one parameter")
-    
-    return metadata, params_class, run_func
-
-
 def _update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
     """
     Update job state with mod completion.
@@ -315,87 +224,88 @@ def _update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
         logger.error(f"Failed to update job state: {e}")
 
 
-def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
+def _validate_mod_execution_inputs(mod_type: str, params: Dict[str, Any], mod_name: str) -> None:
     """
-    Execute a DataPy mod and return the result.
+    Validate inputs for mod execution.
     
     Args:
-        mod_path: Mod identifier or full module path
+        mod_type: Mod type identifier
         params: Parameters for the mod
         mod_name: Unique name for this mod instance
         
-    Returns:
-        ModResult dictionary with execution results
-        
     Raises:
-        ValueError: If parameters are invalid
-        RuntimeError: If execution fails
+        ValueError: If inputs are invalid
     """
-    # Validate inputs
-    if not mod_path or not isinstance(mod_path, str):
-        return validation_error(mod_name or "unknown", "mod_path must be a non-empty string")
+    if not mod_type or not isinstance(mod_type, str):
+        raise ValueError("mod_type must be a non-empty string")
     
     if not isinstance(params, dict):
-        return validation_error(mod_name or "unknown", "params must be a dictionary")
+        raise ValueError("params must be a dictionary")
     
     if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
-        return validation_error("unknown", "mod_name must be a non-empty string")
+        raise ValueError("mod_name must be a non-empty string")
     
-    mod_name = mod_name.strip()
+    if not mod_name.strip().isidentifier():
+        raise ValueError(f"mod_name '{mod_name}' must be a valid Python identifier")
+
+
+def _setup_mod_execution_environment(mod_name: str) -> Dict[str, Any]:
+    """
+    Setup execution environment for mod execution.
     
-    # Validate mod_name is a valid identifier
-    if not mod_name.isidentifier():
-        return validation_error(mod_name, f"mod_name '{mod_name}' must be a valid Python identifier")
-    
-    # Resolve mod path
-    try:
-        resolved_mod_path = _resolve_mod_path(mod_path)
-        mod_type = resolved_mod_path.split('.')[-1]
-    except ImportError as e:
-        return validation_error(mod_name, str(e))
-    
-    # Setup execution context
+    Args:
+        mod_name: Name of mod being executed
+        
+    Returns:
+        Dictionary containing execution context info
+        
+    Raises:
+        RuntimeError: If environment setup fails
+    """
     execution_context = _get_execution_context()
     
-    try:
-        log_file_path, state_file_path = _find_or_create_job_files(execution_context, is_cli=False)
-        
-        # Initialize state if needed
-        if not Path(state_file_path).exists():
-            _initialize_job_state_sdk(state_file_path)
-        
-        # Add to expected mods list
-        _add_mod_to_expected_list(state_file_path, mod_name)
-        
-        # Setup logging
-        log_config = DEFAULT_LOG_CONFIG.copy()
-        log_config.update(_global_config)
-        setup_job_logging(log_file_path, log_config)
-        
-        # Setup mod-specific logger
-        mod_logger = setup_logger(f"{resolved_mod_path}.execution", log_file_path, mod_type, mod_name)
-        
-    except Exception as e:
-        return runtime_error(mod_name, f"Failed to setup execution environment: {e}")
+    # Create job files for logging and state
+    log_file_path, state_file_path = _find_or_create_job_files(execution_context, is_cli=False)
     
-    # Load and validate mod
-    try:
-        mod_module = importlib.import_module(resolved_mod_path)
-        metadata, params_class, run_func = _validate_mod_structure(mod_module, resolved_mod_path)
-        
-    except Exception as e:
-        return validation_error(mod_name, f"Invalid mod structure: {e}")
+    # Initialize state if needed
+    if not Path(state_file_path).exists():
+        _initialize_job_state_sdk(state_file_path)
     
-    # Resolve parameters
+    # Add to expected mods list
+    _add_mod_to_expected_list(state_file_path, mod_name)
+    
+    # Setup logging
+    log_config = DEFAULT_LOG_CONFIG.copy()
+    log_config.update(_global_config)
+    setup_job_logging(log_file_path, log_config)
+    
+    return {
+        'log_file_path': log_file_path,
+        'state_file_path': state_file_path,
+        'execution_context': execution_context
+    }
+
+
+def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
+    """
+    Resolve parameters using the inheritance chain.
+    
+    Args:
+        mod_type: Type of mod being executed
+        params: Raw parameters from caller
+        mod_name: Name of mod instance
+        
+    Returns:
+        Resolved parameters dictionary
+        
+    Raises:
+        RuntimeError: If parameter resolution fails
+    """
     try:
         resolver = create_resolver()
         
-        # Extract mod defaults from params class
+        # Registry mods don't have built-in defaults
         mod_defaults = {}
-        if hasattr(params_class, 'model_fields'):  # Pydantic V2
-            for field_name, field_info in params_class.model_fields.items():
-                if field_name != '_metadata' and field_info.default is not ...:
-                    mod_defaults[field_name] = field_info.default
         
         resolved_params = resolver.resolve_mod_params(
             mod_name=mod_type,
@@ -404,39 +314,59 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, A
             globals_override=_global_config
         )
         
-        # Create parameter instance
-        param_instance = params_class(_metadata=metadata, **resolved_params)
+        return resolved_params
         
     except Exception as e:
-        _update_job_state(state_file_path, mod_name, 'error')
-        return validation_error(mod_name, f"Parameter validation failed: {e}")
+        raise RuntimeError(f"Parameter resolution failed: {e}")
+
+
+def _execute_registry_mod(
+    mod_type: str, 
+    resolved_params: Dict[str, Any], 
+    mod_name: str, 
+    execution_context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Execute mod via registry with full validation.
     
-    # Execute mod
-    mod_logger.info(f"Starting mod execution", extra={"params": resolved_params})
+    Args:
+        mod_type: Type of mod to execute
+        resolved_params: Resolved parameters
+        mod_name: Name of mod instance
+        execution_context: Execution environment context
+        
+    Returns:
+        ModResult dictionary
+        
+    Raises:
+        RuntimeError: If mod execution fails
+    """
+    # Setup mod-specific logger
+    mod_logger = setup_logger(
+        f"registry.{mod_type}.execution", 
+        execution_context['log_file_path'], 
+        mod_type, 
+        mod_name
+    )
+    
+    # Registry lookup and execution
+    registry = get_registry()
+    mod_logger.info(f"Starting registry mod execution", extra={"params": resolved_params})
     
     try:
-        result = run_func(param_instance)
+        result = registry.execute_mod(mod_type, resolved_params, mod_name)
         
         # Validate result structure
-        if not isinstance(result, dict):
-            raise RuntimeError(f"Mod must return a dictionary, got {type(result)}")
-        
-        required_fields = ['status', 'execution_time', 'exit_code', 'metrics', 'artifacts', 'globals', 'warnings', 'errors', 'logs']
-        missing_fields = [field for field in required_fields if field not in result]
-        if missing_fields:
-            raise RuntimeError(f"Result missing required fields: {missing_fields}")
-        
-        if result['status'] not in ('success', 'warning', 'error'):
-            raise RuntimeError(f"Invalid status: {result['status']}")
+        _validate_mod_result(result)
         
         # Update result with mod information
         result['logs']['mod_name'] = mod_name
         result['logs']['mod_type'] = mod_type
         
         # Update job state
-        _update_job_state(state_file_path, mod_name, result['status'])
+        _update_job_state(execution_context['state_file_path'], mod_name, result['status'])
         
-        mod_logger.info(f"Mod execution completed", extra={
+        mod_logger.info(f"Registry mod execution completed", extra={
             "status": result['status'],
             "execution_time": result['execution_time'],
             "exit_code": result['exit_code']
@@ -445,9 +375,80 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, A
         return result
         
     except Exception as e:
-        mod_logger.error(f"Mod execution failed: {e}", exc_info=True)
-        _update_job_state(state_file_path, mod_name, 'error')
-        return runtime_error(mod_name, f"Mod execution failed: {e}")
+        mod_logger.error(f"Registry mod execution failed: {e}", exc_info=True)
+        _update_job_state(execution_context['state_file_path'], mod_name, 'error')
+        raise RuntimeError(f"Mod execution failed: {e}")
+
+
+def _validate_mod_result(result: Dict[str, Any]) -> None:
+    """
+    Validate mod result has required structure.
+    
+    Args:
+        result: Result dictionary from mod execution
+        
+    Raises:
+        RuntimeError: If result structure is invalid
+    """
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Mod must return a dictionary, got {type(result)}")
+    
+    required_fields = [
+        'status', 'execution_time', 'exit_code', 'metrics', 
+        'artifacts', 'globals', 'warnings', 'errors', 'logs'
+    ]
+    missing_fields = [field for field in required_fields if field not in result]
+    if missing_fields:
+        raise RuntimeError(f"Result missing required fields: {missing_fields}")
+    
+    if result['status'] not in ('success', 'warning', 'error'):
+        raise RuntimeError(f"Invalid status: {result['status']}")
+
+
+def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
+    """
+    Execute a DataPy mod via registry with optimized performance.
+    
+    Args:
+        mod_path: Mod type identifier (looked up in registry)
+        params: Parameters for the mod
+        mod_name: Unique name for this mod instance
+        
+    Returns:
+        ModResult dictionary with execution results
+    """
+    try:
+        # Clean and validate inputs
+        mod_type = mod_path.strip()
+        mod_name = mod_name.strip()
+        
+        _validate_mod_execution_inputs(mod_type, params, mod_name)
+        
+        # Check registry for mod existence
+        registry = get_registry()
+        try:
+            registry.get_mod_info(mod_type)
+        except ValueError as e:
+            suggestion = f"python -m datapy register-mod <module_path>"
+            return validation_error(mod_name, f"{e}. Register it with: {suggestion}")
+        
+        # Setup execution environment
+        execution_context = _setup_mod_execution_environment(mod_name)
+        
+        # Resolve parameters
+        resolved_params = _resolve_mod_parameters(mod_type, params, mod_name)
+        
+        # Execute mod
+        result = _execute_registry_mod(mod_type, resolved_params, mod_name, execution_context)
+        
+        return result
+        
+    except ValueError as e:
+        return validation_error(mod_name or "unknown", str(e))
+    except RuntimeError as e:
+        return runtime_error(mod_name or "unknown", str(e))
+    except Exception as e:
+        return runtime_error(mod_name or "unknown", f"Unexpected error: {e}")
 
 
 def get_mod_result(mod_name: str) -> Optional[Dict[str, Any]]:
@@ -465,97 +466,3 @@ def get_mod_result(mod_name: str) -> Optional[Dict[str, Any]]:
     """
     logger.warning(f"get_mod_result() is deprecated - results are now returned directly from run_mod()")
     return None
-
-
-# TODO: Future orchestrator placeholders
-def run_mod_async(mod_path: str, params: Dict[str, Any], mod_name: str) -> str:
-    """
-    Execute a mod asynchronously and return execution ID.
-    
-    TODO: Implement when orchestrator supports async execution.
-    Will handle:
-    - Non-blocking mod execution
-    - Execution tracking and monitoring
-    - Result retrieval by execution ID
-    
-    Args:
-        mod_path: Mod identifier or full module path
-        params: Parameters for the mod
-        mod_name: Unique name for this mod instance
-        
-    Returns:
-        Execution ID for tracking
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Async mod execution not yet implemented - needed for Phase 2 orchestrator")
-
-
-def run_mod_distributed(mod_path: str, params: Dict[str, Any], mod_name: str, cluster_config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Execute a mod in distributed mode across cluster.
-    
-    TODO: Implement when orchestrator supports distributed execution.
-    Will handle:
-    - Cross-server mod execution
-    - Distributed parameter resolution
-    - Cluster-wide result aggregation
-    
-    Args:
-        mod_path: Mod identifier or full module path
-        params: Parameters for the mod
-        mod_name: Unique name for this mod instance
-        cluster_config: Distributed cluster configuration
-        
-    Returns:
-        ModResult dictionary with distributed execution results
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Distributed mod execution not yet implemented - needed for Phase 2 orchestrator")
-
-
-def get_execution_status(execution_id: str) -> Dict[str, Any]:
-    """
-    Get status of async or distributed execution.
-    
-    TODO: Implement when orchestrator supports async/distributed execution.
-    Will provide:
-    - Execution progress tracking
-    - Real-time status updates
-    - Error and warning monitoring
-    
-    Args:
-        execution_id: ID of execution to check
-        
-    Returns:
-        Status dictionary with execution information
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Execution status tracking not yet implemented - needed for Phase 2 orchestrator")
-
-
-def cancel_execution(execution_id: str) -> bool:
-    """
-    Cancel a running async or distributed execution.
-    
-    TODO: Implement when orchestrator supports execution cancellation.
-    Will handle:
-    - Graceful execution termination
-    - Resource cleanup
-    - State consistency maintenance
-    
-    Args:
-        execution_id: ID of execution to cancel
-        
-    Returns:
-        True if cancellation successful
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Execution cancellation not yet implemented - needed for Phase 2 orchestrator")

@@ -111,6 +111,10 @@ def cli(ctx: click.Context, log_level: Optional[str], quiet: bool) -> None:
     ctx.obj['log_level'] = log_level
 
 
+# =============================================================================
+# UPDATED run-mod COMMAND - Now uses registry-based SDK (Phase 2.2)
+# =============================================================================
+
 @cli.command('run-mod')
 @click.argument('mod_name')
 @click.option('--params', '-p', required=True,
@@ -121,7 +125,7 @@ def cli(ctx: click.Context, log_level: Optional[str], quiet: bool) -> None:
 @click.pass_context
 def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_error: bool) -> None:
     """
-    Execute a DataPy mod with state-based logging.
+    Execute a DataPy mod with registry-based execution.
     
     MOD_NAME: Variable name for the mod instance (must match YAML config)
     
@@ -143,7 +147,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
             sys.exit(VALIDATION_ERROR)
         
-        # Load and validate YAML configuration
+        # Load and validate YAML configuration (keep existing)
         try:
             config = load_job_config(params)
             mod_type, mod_params = _parse_mod_config(config, mod_name)
@@ -155,70 +159,39 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
         # Extract yaml_name for file naming
         yaml_name = Path(params).stem
         
-        # Setup job files and state management
-        try:
-            log_file_path, state_file_path = _create_cli_job_files(yaml_name)
-            
-            # Initialize CLI state
-            expected_mods = list(config.get('mods', {}).keys())
-            initialize_job_state(state_file_path, params, expected_mods)
-            
-        except Exception as e:
-            click.echo(f"Error setting up execution environment: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
-        
-        # Setup logging
+        # Setup global config for SDK
         try:
             globals_config = config.get('globals', {})
             if log_level:
                 globals_config['log_level'] = log_level
             
-            setup_job_logging(log_file_path, globals_config)
-            logger = setup_logger(__name__, log_file_path)
+            # Set global config for SDK execution
+            set_global_config(globals_config)
             
         except Exception as e:
-            click.echo(f"Error setting up logging: {e}", err=True)
+            click.echo(f"Error setting up global config: {e}", err=True)
             sys.exit(RUNTIME_ERROR)
         
         # Output execution info
         if not quiet:
             click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
             click.echo(f"Using parameters from: {params}")
-            click.echo(f"Log file: {log_file_path}")
         
-        logger.info(f"CLI executing mod {mod_name}", extra={
-            "mod_type": mod_type,
-            "yaml_file": params,
-            "state_file": state_file_path
-        })
-        
-        # Execute the mod using SDK
+        # Execute the mod using updated SDK (registry-based)
         try:
-            # Set global config for SDK
-            set_global_config(globals_config)
-            
-            # Execute the mod
             result = run_mod(mod_type, mod_params, mod_name)
             
         except Exception as e:
             click.echo(f"Error executing mod: {e}", err=True)
             sys.exit(RUNTIME_ERROR)
         
-        # Check for job completion and archive if complete
-        try:
-            if is_job_complete_cli(state_file_path):
-                archive_completed_state(state_file_path)
-                logger.info("Job completed, archived state file")
-        except Exception as e:
-            logger.warning(f"Failed to archive completed state: {e}")
-        
-        # Output results
+        # Output results (keep existing logic)
         if quiet:
             click.echo(result['status'])
         else:
             click.echo(json.dumps(result, indent=2))
         
-        # Handle exit code
+        # Handle exit code (keep existing logic)
         exit_code = result.get('exit_code', RUNTIME_ERROR)
         if result['status'] == 'error' and exit_on_error:
             if not quiet:
@@ -447,7 +420,205 @@ def main() -> None:
     except Exception as e:
         click.echo(f"Unexpected error: {e}", err=True)
         sys.exit(RUNTIME_ERROR)
+        
+        
+# =============================================================================
+# REGISTRY MANAGEMENT COMMANDS - Added for Phase 1 Registry System
+# =============================================================================
+
+from .registry import get_registry
+
+@cli.command('list-registry')
+@click.option('--category', type=click.Choice(['sources', 'transformers', 'sinks', 'solos']),
+              help='Filter by mod category')
+@click.pass_context
+def list_registry_command(ctx: click.Context, category: Optional[str]) -> None:
+    """
+    List available mods in the registry.
+    
+    Examples:
+        datapy list-registry
+        datapy list-registry --category sources
+    """
+    quiet = ctx.obj.get('quiet', False)
+    
+    try:
+        registry = get_registry()
+        mods = registry.list_available_mods(category)
+        
+        if not mods:
+            filter_msg = f" in category '{category}'" if category else ""
+            if not quiet:
+                click.echo(f"No mods found{filter_msg}")
+            return
+        
+        if not quiet:
+            title = f"Registered Mods{f' ({category})' if category else ''}"
+            click.echo(title)
+            click.echo("=" * len(title))
+            
+            for mod_type in sorted(mods):
+                try:
+                    mod_info = registry.get_mod_info(mod_type)
+                    description = mod_info.get('metadata', {}).get('description', 'No description')
+                    version = mod_info.get('metadata', {}).get('version', 'unknown')
+                    click.echo(f"  {mod_type} (v{version}) - {description}")
+                except Exception as e:
+                    click.echo(f"  {mod_type} - Error loading info: {e}")
+        else:
+            # Quiet mode: just list mod names
+            for mod_type in sorted(mods):
+                click.echo(mod_type)
+                
+    except Exception as e:
+        click.echo(f"Error listing registry: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+
+
+@cli.command('register-mod')
+@click.argument('module_path')
+@click.pass_context
+def register_mod_command(ctx: click.Context, module_path: str) -> None:
+    """
+    Register a new mod in the registry.
+    
+    MODULE_PATH: Full module path to the mod (e.g., datapy.mods.sources.csv_reader)
+    
+    Examples:
+        datapy register-mod datapy.mods.sources.csv_reader
+        datapy register-mod my_project.custom_mods.data_processor
+    """
+    quiet = ctx.obj.get('quiet', False)
+    
+    try:
+        registry = get_registry()
+        
+        if not quiet:
+            click.echo(f"Registering mod: {module_path}")
+        
+        success = registry.register_mod(module_path)
+        
+        if success:
+            mod_type = module_path.split('.')[-1]
+            if quiet:
+                click.echo("success")
+            else:
+                click.echo(f"Successfully registered mod: {mod_type}")
+        else:
+            if quiet:
+                click.echo("error")
+            else:
+                click.echo("Registration failed", err=True)
+            sys.exit(RUNTIME_ERROR)
+            
+    except ValueError as e:
+        if quiet:
+            click.echo("error")
+        else:
+            click.echo(f"Registration failed: {e}", err=True)
+        sys.exit(VALIDATION_ERROR)
+    except Exception as e:
+        if quiet:
+            click.echo("error")
+        else:
+            click.echo(f"Registration failed: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+
+
+@cli.command('validate-registry')
+@click.pass_context
+def validate_registry_command(ctx: click.Context) -> None:
+    """
+    Validate all mods in the registry.
+    
+    Examples:
+        datapy validate-registry
+    """
+    quiet = ctx.obj.get('quiet', False)
+    
+    try:
+        registry = get_registry()
+        
+        if not quiet:
+            click.echo("Validating registry...")
+        
+        errors = registry.validate_registry()
+        
+        if not errors:
+            if quiet:
+                click.echo("valid")
+            else:
+                total_mods = len(registry.list_available_mods())
+                click.echo(f"Registry validation successful! All {total_mods} mods are valid.")
+        else:
+            if quiet:
+                click.echo("invalid")
+            else:
+                click.echo("Registry validation failed:", err=True)
+                for error in errors:
+                    click.echo(f"  - {error}", err=True)
+            sys.exit(VALIDATION_ERROR)
+            
+    except Exception as e:
+        if quiet:
+            click.echo("error")
+        else:
+            click.echo(f"Registry validation failed: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+
+
+@cli.command('mod-info')
+@click.argument('mod_type')
+@click.pass_context
+def mod_info_command(ctx: click.Context, mod_type: str) -> None:
+    """
+    Show detailed information about a registered mod.
+    
+    MOD_TYPE: Type of mod to show info for
+    
+    Examples:
+        datapy mod-info csv_reader
+        datapy mod-info data_cleaner
+    """
+    quiet = ctx.obj.get('quiet', False)
+    
+    try:
+        registry = get_registry()
+        mod_info = registry.get_mod_info(mod_type)
+        
+        if quiet:
+            click.echo(json.dumps(mod_info, indent=2))
+        else:
+            metadata = mod_info.get('metadata', {})
+            click.echo(f"Mod Information: {mod_type}")
+            click.echo("=" * (17 + len(mod_type)))
+            click.echo(f"Module Path: {mod_info.get('module_path', 'unknown')}")
+            click.echo(f"Version: {metadata.get('version', 'unknown')}")
+            click.echo(f"Category: {metadata.get('category', 'unknown')}")
+            click.echo(f"Author: {metadata.get('author', 'unknown')}")
+            click.echo(f"Description: {metadata.get('description', 'No description')}")
+            
+            if 'registered_at' in mod_info:
+                click.echo(f"Registered: {mod_info['registered_at']}")
+            
+    except ValueError as e:
+        if quiet:
+            click.echo("not_found")
+        else:
+            click.echo(f"Error: {e}", err=True)
+        sys.exit(VALIDATION_ERROR)
+    except Exception as e:
+        if quiet:
+            click.echo("error")
+        else:
+            click.echo(f"Error getting mod info: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)        
+        
+
 
 
 if __name__ == '__main__':
     main()
+    
+    
+    
