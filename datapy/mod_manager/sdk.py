@@ -1,108 +1,44 @@
 """
-Python SDK for DataPy framework.
-
-Provides programmatic interface for running mods with automatic logging setup,
-parameter resolution, and global configuration management.
+Python SDK for DataPy framework with state-based logging.
 """
 
 import importlib
 import inspect
 import os
-import atexit
-from typing import Dict, Any, Optional, Union
-from .logger import start_execution, finalize_execution, get_current_context, setup_logger
-from .params import create_resolver
+import json
+import time
+import glob
+from pathlib import Path
+from typing import Dict, Any, Optional, Union, Tuple, List
+from .logger import (
+    setup_job_logging, setup_logger,
+    update_job_state, archive_completed_state,
+    DEFAULT_LOG_CONFIG
+)
+from .params import create_resolver, load_job_config
 from .result import ModResult, validation_error, runtime_error
 from .base import ModMetadata, BaseModParams
 
-# Global configuration storage
 _global_config: Dict[str, Any] = {}
-_auto_context_started: bool = False
 
-logger = setup_logger(__name__)
+logger = setup_logger(__name__, "")
 
-#Global config functions
 
 def set_global_config(config: Dict[str, Any]) -> None:
-    """
-    Set global configuration for the current Python execution session.
-    
-    Args:
-        config: Global configuration dictionary
-        
-    Example:
-        set_global_config({
-            "base_path": "/data/2024-08-12",
-            "log_level": "DEBUG",
-            "log_path": "/logs/etl/"
-        })
-    """
     global _global_config
-    
     _global_config.update(config)
-    logger.info("Global configuration set", extra={"config": config})
 
 
 def get_global_config() -> Dict[str, Any]:
-    """
-    Get the current global configuration.
-    
-    Returns:
-        Copy of global configuration dictionary
-    """
     return _global_config.copy()
 
 
 def clear_global_config() -> None:
-    """
-    Clear global configuration (primarily for testing).
-    
-    Warning: This will reset all global settings and execution context.
-    """
-    global _global_config, _auto_context_started
+    global _global_config
     _global_config.clear()
-    _auto_context_started = False
-    
-    # Clear execution context if it exists
-    context = get_current_context()
-    if context and hasattr(context, 'used_mod_names'):
-        context.used_mod_names.clear()
-
-
-#context detection
-
-def _detect_script_name() -> str:
-    """
-    Detect the main script filename using call stack inspection.
-    
-    Returns:
-        Script filename or fallback name for interactive/edge cases
-    """
-    frame = inspect.currentframe()
-    try:
-        while frame:
-            filename = frame.f_code.co_filename
-            # Skip framework files and interactive contexts
-            if (filename != __file__ and 
-                not filename.endswith(('sdk.py', 'cli.py', 'logger.py', 'params.py', 'result.py', 'base.py')) and
-                not filename.startswith('<') and  # Skip <stdin>, <console>, etc.
-                not 'site-packages' in filename):  # Skip library files
-                return os.path.basename(filename)
-            frame = frame.f_back
-    finally:
-        del frame
-    
-    # Fallback for interactive/edge cases
-    return "python_execution.py"
 
 
 def _is_called_from_cli() -> bool:
-    """
-    Detect if run_mod is being called from CLI context.
-    
-    Returns:
-        True if called from CLI, False if called from Python script
-    """
     frame = inspect.currentframe()
     try:
         while frame:
@@ -115,61 +51,137 @@ def _is_called_from_cli() -> bool:
     return False
 
 
-def _ensure_execution_context() -> None:
-    """
-    Ensure execution context exists, auto-starting if needed.
-    
-    This handles the automatic logging setup for SDK usage where users
-    just call run_mod() without explicit context management.
-    """
-    global _auto_context_started
-    
-    if get_current_context() is None:
-        # Auto-detect script name and start execution context
-        script_name = _detect_script_name()
-        
-        # Merge global config for logging setup
-        log_config = {}
-        if _global_config:
-            # Extract logging configuration from globals
-            if "log_level" in _global_config:
-                log_config["log_level"] = _global_config["log_level"]
-            if "log_path" in _global_config:
-                log_config["log_path"] = _global_config["log_path"]
-            if "log_format" in _global_config:
-                log_config["log_format"] = _global_config["log_format"]
-        
-        # Start execution context
-        start_execution(script_name, log_config if log_config else None)
-        _auto_context_started = True
-        
-        # Register cleanup when Python process exits
-        atexit.register(finalize_execution)
-        
-        logger.info(f"Auto-started execution context for script: {script_name}")
+def _get_execution_context() -> str:
+    if _is_called_from_cli():
+        raise RuntimeError("CLI should not call _get_execution_context")
+    else:
+        return "sdk_execution"
 
 
-#mod resolution, validation & var injection
+def find_or_create_job_files(execution_context: str, is_cli: bool = False) -> Tuple[str, str]:
+    log_base = _global_config.get('log_path', 'logs')
+    
+    state_running = Path(log_base) / "state" / "running"
+    state_running.mkdir(parents=True, exist_ok=True)
+    Path(log_base).mkdir(exist_ok=True)
+    
+    pattern = str(state_running / f"{execution_context}_*.state")
+    existing_states = glob.glob(pattern)
+    
+    if existing_states:
+        state_file_path = existing_states[0]
+        execution_id = Path(state_file_path).stem
+        log_file_path = str(Path(log_base) / f"{execution_id}.log")
+        
+        if not Path(log_file_path).exists():
+            Path(log_file_path).touch()
+        
+        return log_file_path, state_file_path
+    else:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        execution_id = f"{execution_context}_{timestamp}"
+        log_file_path = str(Path(log_base) / f"{execution_id}.log")
+        state_file_path = str(state_running / f"{execution_id}.state")
+        
+        Path(log_file_path).touch()
+        
+        return log_file_path, state_file_path
+
+
+def initialize_job_state_cli(state_file_path: str, yaml_file: str) -> None:
+    try:
+        config = load_job_config(yaml_file)
+        expected_mods = list(config.get('mods', {}).keys())
+    except Exception as e:
+        expected_mods = []
+        logger.warning(f"Failed to parse YAML {yaml_file} for expected mods: {e}")
+    
+    execution_id = Path(state_file_path).stem
+    
+    initial_state = {
+        "execution_id": execution_id,
+        "yaml_file": yaml_file,
+        "expected_mods": expected_mods,
+        "completed_mods": [],
+        "failed_mods": [],
+        "is_complete": False,
+        "mode": "cli",
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    }
+    
+    Path(state_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(state_file_path, 'w') as f:
+        json.dump(initial_state, f, indent=2)
+
+
+def initialize_job_state_sdk(state_file_path: str) -> None:
+    execution_id = Path(state_file_path).stem
+    
+    initial_state = {
+        "execution_id": execution_id,
+        "yaml_file": None,
+        "expected_mods": [],
+        "completed_mods": [],
+        "failed_mods": [],
+        "is_complete": False,
+        "mode": "sdk",
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    }
+    
+    Path(state_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(state_file_path, 'w') as f:
+        json.dump(initial_state, f, indent=2)
+
+
+def _add_mod_to_expected_list(state_file_path: str, mod_name: str) -> None:
+    try:
+        if not Path(state_file_path).exists():
+            return
+        
+        with open(state_file_path, 'r') as f:
+            state = json.load(f)
+        
+        if mod_name not in state['expected_mods']:
+            state['expected_mods'].append(mod_name)
+            state['last_updated'] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            
+            temp_file = state_file_path + '.tmp'
+            with open(temp_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            os.rename(temp_file, state_file_path)
+    
+    except Exception as e:
+        logger.error(f"Failed to add mod {mod_name} to expected list: {e}")
+
+
+def is_job_complete_cli(state_file_path: str) -> bool:
+    try:
+        if not Path(state_file_path).exists():
+            return False
+        
+        with open(state_file_path, 'r') as f:
+            state = json.load(f)
+        
+        if state.get('mode') != 'cli':
+            return False
+        
+        expected = set(state.get('expected_mods', []))
+        completed = set(state.get('completed_mods', []))
+        
+        return len(expected) > 0 and expected == completed
+    
+    except Exception:
+        return False
+
 
 def _resolve_mod_path(mod_identifier: str) -> str:
-    """
-    Resolve mod identifier to full module path.
-    
-    Args:
-        mod_identifier: Either full path (datapy.mods.sources.csv_reader) 
-                       or just mod name (csv_reader)
-    
-    Returns:
-        Full module path
-        
-    Raises:
-        ImportError: If mod cannot be found
-    """
-    # If it contains dots, assume it's already a full path
     if '.' in mod_identifier:
         return mod_identifier
     
-    # Search for mod by name in standard locations
     search_paths = [
         f"datapy.mods.sources.{mod_identifier}",
         f"datapy.mods.transformers.{mod_identifier}",
@@ -180,73 +192,36 @@ def _resolve_mod_path(mod_identifier: str) -> str:
     for path in search_paths:
         try:
             importlib.import_module(path)
-            logger.debug(f"Resolved mod '{mod_identifier}' to '{path}'")
             return path
         except ImportError:
             continue
     
-    # If not found in standard locations, raise error
-    raise ImportError(f"Mod '{mod_identifier}' not found in standard locations: {search_paths}")
+    raise ImportError(f"Mod '{mod_identifier}' not found in standard locations")
 
 
 def _validate_mod_name(mod_name: str) -> bool:
-    """
-    Validate mod_name is a valid Python identifier.
-    
-    Args:
-        mod_name: Proposed variable name
-        
-    Returns:
-        True if valid, False otherwise
-    """
-    if not isinstance(mod_name, str):
+    if not isinstance(mod_name, str) or not mod_name:
         return False
     
-    # Check if it's a valid Python identifier
     if not mod_name.isidentifier():
         return False
     
-    # Check against Python keywords
     import keyword
     if keyword.iskeyword(mod_name):
-        return False
-    
-    # Check against common builtins to avoid conflicts
-    dangerous_names = {
-        'print', 'len', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
-        'range', 'open', 'file', 'input', 'output', 'type', 'object', 'class',
-        'import', 'from', 'as', 'with', 'try', 'except', 'finally', 'raise',
-        'def', 'return', 'yield', 'lambda', 'global', 'nonlocal', 'locals', 'globals'
-    }
-    
-    if mod_name in dangerous_names:
         return False
     
     return True
 
 
 def _check_variable_safety(mod_name: str) -> bool:
-    """
-    Check if creating this variable would overwrite something important.
-    
-    Args:
-        mod_name: Proposed variable name
-        
-    Returns:
-        True if safe to create, False if would overwrite
-    """
-    # Skip safety checks for CLI context
     if _is_called_from_cli():
         return True
     
-    # Get caller's frame (two levels up: _check_variable_safety <- run_mod <- user_code)
     frame = inspect.currentframe().f_back.f_back
     
     try:
-        # Check if variable already exists in caller's namespace
         if mod_name in frame.f_globals:
             existing = frame.f_globals[mod_name]
-            # Allow overwriting previous mod results (dict with 'status' key)
             if isinstance(existing, dict) and 'status' in existing:
                 return True
             else:
@@ -258,44 +233,10 @@ def _check_variable_safety(mod_name: str) -> bool:
         del frame
 
 
-def _check_execution_uniqueness(mod_name: str) -> bool:
-    """
-    Check if mod_name is unique within current execution.
-    
-    Args:
-        mod_name: Proposed mod name
-        
-    Returns:
-        True if unique, False if already used
-    """
-    context = get_current_context()
-    if context is None:
-        return True
-    
-    # Store used mod names in context
-    if not hasattr(context, 'used_mod_names'):
-        context.used_mod_names = set()
-    
-    if mod_name in context.used_mod_names:
-        return False
-    
-    context.used_mod_names.add(mod_name)
-    return True
-
-
 def _inject_variable(mod_name: str, result: Dict[str, Any]) -> None:
-    """
-    Inject result into caller's namespace as a variable.
-    
-    Args:
-        mod_name: Variable name to create
-        result: Mod result dictionary to store
-    """
-    # Skip variable injection for CLI context
     if _is_called_from_cli():
         return
     
-    # Get caller's frame (two levels up: _inject_variable <- run_mod <- user_code)
     frame = inspect.currentframe().f_back.f_back
     
     try:
@@ -307,86 +248,57 @@ def _inject_variable(mod_name: str, result: Dict[str, Any]) -> None:
         del frame
 
 
-#executor
-
-
 def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, Dict[str, Any]]:
-    """
-    Execute a DataPy mod with automatic context management and parameter resolution.
+    is_cli = _is_called_from_cli()
     
-    This function automatically detects whether it's called from CLI or Python script:
-    - CLI: Returns full result dictionary 
-    - Python script: Injects variable and returns exit code
-    
-    Args:
-        mod_path: Module path (e.g., "datapy.mods.sources.csv_reader") 
-                 or just mod name (e.g., "csv_reader")
-        params: Parameters dictionary for the mod
-        mod_name: Variable name for storing result (required)
-        
-    Returns:
-        CLI context: Full result dictionary
-        Script context: Exit code (0=success, 10=warning, 20+=error)
-        
-    Example:
-        # Python script usage
-        exit_code = run_mod("csv_reader", {"input_path": "data.csv"}, "customer_data")
-        if exit_code == 0:
-            print(f"Processed {customer_data['metrics']['rows_processed']} rows")
-            
-        # CLI usage (automatic)
-        result = run_mod("csv_reader", {"input_path": "data.csv"}, "config")
-        # Returns full result dict for CLI display
-    """
-    # Validate mod_name
     if not _validate_mod_name(mod_name):
         error_result = validation_error(mod_name, f"Invalid mod_name '{mod_name}': must be valid Python identifier")
-        if _is_called_from_cli():
+        if is_cli:
             return error_result
         else:
             _inject_variable(mod_name, error_result)
             return error_result['exit_code']
     
-    # Check for variable conflicts (only for script context)
-    if not _check_variable_safety(mod_name):
+    if not is_cli and not _check_variable_safety(mod_name):
         error_result = validation_error(mod_name, f"mod_name '{mod_name}' would overwrite existing variable")
-        if _is_called_from_cli():
-            return error_result
-        else:
-            return error_result['exit_code']
-    
-    # Check for uniqueness within current execution
-    if not _check_execution_uniqueness(mod_name):
-        error_result = validation_error(mod_name, f"mod_name '{mod_name}' already used in this execution")
-        if _is_called_from_cli():
-            return error_result
-        else:
-            _inject_variable(mod_name, error_result)
-            return error_result['exit_code']
-    
-    # Ensure execution context exists (auto-start if needed)
-    _ensure_execution_context()
+        _inject_variable(mod_name, error_result)
+        return error_result['exit_code']
     
     try:
-        # Resolve mod path if just name provided
         resolved_mod_path = _resolve_mod_path(mod_path)
         mod_type = resolved_mod_path.split('.')[-1]
     except ImportError as e:
         error_result = validation_error(mod_name, str(e))
-        if _is_called_from_cli():
+        if is_cli:
             return error_result
         else:
             _inject_variable(mod_name, error_result)
             return error_result['exit_code']
     
+    if is_cli:
+        execution_context = "cli_context"
+        log_file_path, state_file_path = find_or_create_job_files(execution_context, is_cli=True)
+    else:
+        execution_context = _get_execution_context()
+        log_file_path, state_file_path = find_or_create_job_files(execution_context, is_cli=False)
+        
+        if not Path(state_file_path).exists():
+            initialize_job_state_sdk(state_file_path)
+        
+        _add_mod_to_expected_list(state_file_path, mod_name)
+    
+    log_config = DEFAULT_LOG_CONFIG.copy()
+    log_config.update(_global_config)
+    setup_job_logging(log_file_path, log_config)
+    
+    mod_logger = setup_logger(f"{resolved_mod_path}.execution", log_file_path, mod_type, mod_name)
+    
     try:
-        # Dynamic module loading
         mod_module = importlib.import_module(resolved_mod_path)
         
-        # Validate required components exist
         if not hasattr(mod_module, 'run'):
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'run' function")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
@@ -394,7 +306,7 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
         
         if not hasattr(mod_module, 'METADATA'):
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'METADATA'")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
@@ -402,85 +314,73 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
         
         if not hasattr(mod_module, 'Params'):
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} missing required 'Params' class")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
         
-        # Validate metadata
         metadata = mod_module.METADATA
         if not isinstance(metadata, ModMetadata):
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} METADATA must be ModMetadata instance")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
         
-        # Validate Params class inheritance
         params_class = mod_module.Params
         if not issubclass(params_class, BaseModParams):
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} Params must inherit from BaseModParams")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
         
-        # Validate run function signature
         run_func = mod_module.run
         sig = inspect.signature(run_func)
         if len(sig.parameters) != 1:
             error_result = validation_error(mod_name, f"Mod {resolved_mod_path} run function must accept exactly one parameter")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
         
-        # Parameter resolution
         resolver = create_resolver()
         
-        # Get mod defaults if available
         mod_defaults = {}
         if hasattr(params_class, '__fields__'):
-            # Extract default values from Pydantic fields
             for field_name, field_info in params_class.__fields__.items():
                 if field_name != '_metadata' and field_info.default is not ...:
                     mod_defaults[field_name] = field_info.default
         
-        # Resolve parameters using inheritance chain
         resolved_params = resolver.resolve_mod_params(
-            mod_name=mod_type,  # Use mod_type for parameter resolution
+            mod_name=mod_type,
             job_params=params,
             mod_defaults=mod_defaults,
             globals_override=_global_config
         )
         
-        # Create and validate parameter instance
         try:
             param_instance = params_class(_metadata=metadata, **resolved_params)
         except Exception as e:
             error_result = validation_error(mod_name, f"Parameter validation failed: {e}")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
         
-        # Setup mod-specific logger
-        mod_logger = setup_logger(f"{resolved_mod_path}.execution", mod_type=mod_type)
         mod_logger.info(f"Starting mod execution", extra={"params": resolved_params})
         
-        # Execute the mod
         try:
             result = run_func(param_instance)
             
-            # Validate result format
             if not isinstance(result, dict):
                 error_result = runtime_error(mod_name, f"Mod {resolved_mod_path} must return a dictionary")
-                if _is_called_from_cli():
+                if is_cli:
                     return error_result
                 else:
                     _inject_variable(mod_name, error_result)
@@ -490,7 +390,7 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
             missing_fields = [field for field in required_fields if field not in result]
             if missing_fields:
                 error_result = runtime_error(mod_name, f"Mod {resolved_mod_path} result missing required fields: {missing_fields}")
-                if _is_called_from_cli():
+                if is_cli:
                     return error_result
                 else:
                     _inject_variable(mod_name, error_result)
@@ -498,15 +398,19 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
             
             if result['status'] not in ('success', 'warning', 'error'):
                 error_result = runtime_error(mod_name, f"Mod {resolved_mod_path} returned invalid status: {result['status']}")
-                if _is_called_from_cli():
+                if is_cli:
                     return error_result
                 else:
                     _inject_variable(mod_name, error_result)
                     return error_result['exit_code']
             
-            # Update result with mod identification
             result['logs']['mod_name'] = mod_name
             result['logs']['mod_type'] = mod_type
+            
+            update_job_state(state_file_path, mod_name, result['status'])
+            
+            if is_cli and is_job_complete_cli(state_file_path):
+                archive_completed_state(state_file_path)
             
             mod_logger.info(f"Mod execution completed", extra={
                 "status": result['status'],
@@ -514,69 +418,37 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Union[int, 
                 "exit_code": result['exit_code']
             })
             
-            # Return based on context
-            if _is_called_from_cli():
-                return result  # CLI gets full result
+            if is_cli:
+                return result
             else:
-                _inject_variable(mod_name, result)  # Script gets variable injection
-                return result['exit_code']  # Script gets exit code
+                _inject_variable(mod_name, result)
+                return result['exit_code']
             
         except Exception as e:
             mod_logger.error(f"Mod execution failed: {e}", exc_info=True)
+            
+            update_job_state(state_file_path, mod_name, 'error')
+            
             error_result = runtime_error(mod_name, f"Mod execution failed: {e}")
-            if _is_called_from_cli():
+            if is_cli:
                 return error_result
             else:
                 _inject_variable(mod_name, error_result)
                 return error_result['exit_code']
     
-    except ImportError as e:
-        error_result = validation_error(mod_name, f"Cannot import mod {resolved_mod_path}: {e}")
-        if _is_called_from_cli():
-            return error_result
-        else:
-            _inject_variable(mod_name, error_result)
-            return error_result['exit_code']
     except Exception as e:
         error_result = runtime_error(mod_name, f"Unexpected error loading mod {resolved_mod_path}: {e}")
-        if _is_called_from_cli():
+        if is_cli:
             return error_result
         else:
             _inject_variable(mod_name, error_result)
             return error_result['exit_code']
-
-
-#utils
-
-def is_auto_context_active() -> bool:
-    """
-    Check if auto-context management is active.
-    
-    Returns:
-        True if SDK auto-started the execution context
-    """
-    return _auto_context_started
 
 
 def get_mod_result(mod_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Get the result of a previously executed mod by name.
-    
-    Args:
-        mod_name: Name of the mod result to retrieve
-        
-    Returns:
-        Mod result dictionary or None if not found
-        
-    Example:
-        run_mod("csv_reader", params, "customer_data")
-        result = get_mod_result("customer_data")  # Alternative to direct variable access
-    """
-    # Skip for CLI context
     if _is_called_from_cli():
         return None
     
-    # Get caller's frame
     frame = inspect.currentframe().f_back
     
     try:
@@ -587,3 +459,7 @@ def get_mod_result(mod_name: str) -> Optional[Dict[str, Any]]:
         return None
     finally:
         del frame
+
+
+def update_job_state_concurrent(state_file_path: str, mod_name: str, status: str) -> None:
+    raise NotImplementedError("Concurrent state updates not yet implemented - needed for Phase 2 orchestrator")

@@ -1,125 +1,46 @@
 """
-Simplified logging with execution context management for DataPy framework.
+State-based logging with JSON-only output for DataPy framework.
 
-Provides consolidated logging with temp folder lifecycle management,
-automatic file moving, and mod instance tracking.
+Provides consolidated logging with state file lifecycle management,
+automatic job discovery, and mod instance tracking without execution contexts.
 """
 
 import logging
 import json
 import sys
-import uuid
-import time
+import os
 import shutil
+import time
 from pathlib import Path
-from typing import Dict, Any, Optional
-import threading
-from contextlib import contextmanager
-
-# Global execution context
-_current_context: Optional['ExecutionContext'] = None
-_context_lock = threading.Lock()
+from typing import Dict, Any, Optional, List, Tuple
+from datetime import datetime
+import glob
 
 # Default configuration
 DEFAULT_LOG_CONFIG = {
     "log_level": "INFO",
     "log_path": "logs",
-    "log_format": "json",
-    "console_output": True
+    "log_format": "json"
 }
 
 
-class ExecutionContext:
-    """
-    Tracks execution state and manages log file lifecycle.
-    """
-    
-    def __init__(self, execution_name: str, log_config: Dict[str, Any]):
-        """
-        Initialize execution context.
-        
-        Args:
-            execution_name: Name for log file (script/config name)
-            log_config: Logging configuration
-        """
-        self.execution_name = Path(execution_name).stem
-        self.timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self.execution_id = f"{self.execution_name}_{self.timestamp}"
-        self.execution_type = "cli" if execution_name.endswith('.yaml') else "script"
-        
-        # Setup paths
-        self.log_config = log_config
-        self.log_base_path = Path(log_config.get("log_path", "logs"))
-        self.running_path = self.log_base_path / "running"
-        self.completed_path = self.log_base_path
-        
-        # Create directories
-        self.running_path.mkdir(parents=True, exist_ok=True)
-        self.completed_path.mkdir(parents=True, exist_ok=True)
-        
-        # Log file paths
-        self.log_filename = f"{self.execution_id}.log"
-        self.current_log_path = self.running_path / self.log_filename
-        self.final_log_path = self.completed_path / self.log_filename
-        
-        # Execution tracking
-        self.mod_counter = 0
-        self.start_time = time.time()
-        self.loggers_configured = False
-    
-    def get_next_mod_instance(self) -> str:
-        """Get next mod instance number."""
-        self.mod_counter += 1
-        return f"{self.mod_counter:03d}"
-    
-    def finalize(self) -> None:
-        """Move log file from running to completed directory."""
-        if self.current_log_path.exists():
-            # Close all file handlers first
-            self._close_file_handlers()
-            
-            # Move file to final location
-            if self.final_log_path.exists():
-                self.final_log_path.unlink()  # Remove existing file
-            
-            shutil.move(str(self.current_log_path), str(self.final_log_path))
-    
-    def _close_file_handlers(self) -> None:
-        """Close all file handlers to release file locks."""
-        for handler in logging.root.handlers[:]:
-            if isinstance(handler, logging.FileHandler):
-                handler.close()
-                logging.root.removeHandler(handler)
-
-
 class DataPyFormatter(logging.Formatter):
-    """JSON formatter for structured logging."""
+    """JSON formatter for structured logging with simplified fields."""
     
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON structure."""
-        context = get_current_context()
-        
         log_entry = {
-            "timestamp": self.formatTime(record),
+            "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
         
-        # Add execution context
-        if context:
-            log_entry.update({
-                "execution_id": context.execution_id,
-                "execution_type": context.execution_type,
-            })
-        
         # Add mod-specific context if available
         if hasattr(record, 'mod_type'):
             log_entry["mod_type"] = record.mod_type
-        if hasattr(record, 'mod_instance'):
-            log_entry["mod_instance"] = record.mod_instance
-        if hasattr(record, 'run_id'):
-            log_entry["run_id"] = record.run_id
+        if hasattr(record, 'mod_name'):
+            log_entry["mod_name"] = record.mod_name
         
         # Add exception info if present
         if record.exc_info:
@@ -132,219 +53,30 @@ class DataPyFormatter(logging.Formatter):
                 'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
                 'relativeCreated', 'thread', 'threadName', 'processName', 
                 'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
-                'mod_instance', 'run_id'
+                'mod_name'
             }:
                 log_entry[key] = value
         
         return json.dumps(log_entry, default=str)
 
 
-class DataPyConsoleFormatter(logging.Formatter):
-    """Human-readable formatter for console output."""
-    
-    def format(self, record: logging.LogRecord) -> str:
-        """Format log record for console display."""
-        timestamp = self.formatTime(record, '%H:%M:%S')
-        level = record.levelname.ljust(8)
-        
-        # Add mod context if available
-        context_parts = []
-        if hasattr(record, 'mod_type'):
-            mod_context = record.mod_type
-            if hasattr(record, 'mod_instance'):
-                mod_context += f"#{record.mod_instance}"
-            context_parts.append(mod_context)
-        
-        context = f"[{' '.join(context_parts)}] " if context_parts else ""
-        message = f"{timestamp} {level} {context}{record.getMessage()}"
-        
-        # Add exception if present
-        if record.exc_info:
-            message += "\n" + self.formatException(record.exc_info)
-        
-        return message
-
-
-def get_current_context() -> Optional[ExecutionContext]:
-    """Get current execution context."""
-    return _current_context
-
-
-@contextmanager
-def execution_logger(execution_name: str, log_config: Optional[Dict[str, Any]] = None):
+def setup_job_logging(log_file_path: str, log_config: Dict[str, Any]) -> None:
     """
-    Context manager for execution logging lifecycle.
+    Setup JSON logging handlers for specific log file.
     
     Args:
-        execution_name: Name for log file (script/config name)
-        log_config: Optional logging configuration override
-        
-    Yields:
-        ExecutionContext instance
-        
-    Example:
-        with execution_logger("daily_etl.yaml") as ctx:
-            run_mod("csv_reader", params)
-            run_mod("data_cleaner", params)
-        # Log file automatically moved to completed/
+        log_file_path: Path to log file
+        log_config: Logging configuration dictionary
     """
-    global _current_context
-    
-    # Merge configuration
-    config = DEFAULT_LOG_CONFIG.copy()
-    if log_config:
-        config.update(log_config)
-    
-    with _context_lock:
-        # Create execution context
-        context = ExecutionContext(execution_name, config)
-        _current_context = context
-        
-        try:
-            # Setup logging
-            _setup_handlers(context)
-            
-            # Log execution start
-            logger = logging.getLogger(__name__)
-            logger.info("DataPy execution started", extra={
-                "execution_id": context.execution_id,
-                "execution_type": context.execution_type,
-                "log_file": str(context.current_log_path),
-                "config": config
-            })
-            
-            yield context
-            
-        finally:
-            # Log execution end
-            execution_time = time.time() - context.start_time
-            logger.info("DataPy execution completed", extra={
-                "execution_time": round(execution_time, 3),
-                "total_mods": context.mod_counter
-            })
-            
-            # Finalize logging (move file)
-            context.finalize()
-            _current_context = None
-
-
-def start_execution(execution_name: str, log_config: Optional[Dict[str, Any]] = None) -> str:
-    """
-    Start execution logging (alternative to context manager).
-    
-    Args:
-        execution_name: Name for log file
-        log_config: Optional logging configuration
-        
-    Returns:
-        Path to current log file
-        
-    Note: Must call finalize_execution() when done
-    """
-    global _current_context
-    
-    # Merge configuration
-    config = DEFAULT_LOG_CONFIG.copy()
-    if log_config:
-        config.update(log_config)
-    
-    with _context_lock:
-        # Create execution context
-        context = ExecutionContext(execution_name, config)
-        _current_context = context
-        
-        # Setup logging
-        _setup_handlers(context)
-        
-        # Log execution start
-        logger = logging.getLogger(__name__)
-        logger.info("DataPy execution started", extra={
-            "execution_id": context.execution_id,
-            "execution_type": context.execution_type,
-            "log_file": str(context.current_log_path),
-            "config": config
-        })
-        
-        return str(context.current_log_path)
-
-
-def finalize_execution() -> Optional[str]:
-    """
-    Finalize execution logging and move log file.
-    
-    Returns:
-        Path to final log file location, or None if no active execution
-    """
-    global _current_context
-    
-    with _context_lock:
-        if _current_context is None:
-            return None
-        
-        context = _current_context
-        
-        # Log execution end
-        execution_time = time.time() - context.start_time
-        logger = logging.getLogger(__name__)
-        logger.info("DataPy execution completed", extra={
-            "execution_time": round(execution_time, 3),
-            "total_mods": context.mod_counter
-        })
-        
-        # Finalize and move file
-        context.finalize()
-        final_path = str(context.final_log_path)
-        _current_context = None
-        
-        return final_path
-
-
-def setup_logger(name: str, mod_type: Optional[str] = None) -> logging.Logger:
-    """
-    Setup a logger for a specific component with DataPy context.
-    
-    Args:
-        name: Logger name (typically __name__)
-        mod_type: Type of the mod using this logger (e.g., "csv_reader")
-        
-    Returns:
-        Configured logger instance
-    """
-    logger = logging.getLogger(name)
-    
-    # Add mod context to all log records from this logger
-    if mod_type:
-        # Get mod instance number from current context
-        context = get_current_context()
-        mod_instance = context.get_next_mod_instance() if context else "000"
-        run_id = f"{mod_type}_{mod_instance}_{uuid.uuid4().hex[:8]}"
-        
-        # Create a custom filter to add context
-        def add_context(record):
-            record.mod_type = mod_type
-            record.mod_instance = mod_instance
-            record.run_id = run_id
-            return True
-        
-        logger.addFilter(add_context)
-    
-    return logger
-
-
-def _setup_handlers(context: ExecutionContext) -> None:
-    """Setup logging handlers for the execution context."""
-    if context.loggers_configured:
-        return
-    
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, context.log_config["log_level"].upper()))
+    root_logger.setLevel(getattr(logging, log_config.get("log_level", "INFO").upper()))
     
     # Clear any existing handlers
     root_logger.handlers.clear()
     
     # Setup file handler with JSON formatting
-    file_handler = logging.FileHandler(context.current_log_path, encoding='utf-8')
+    file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
     file_handler.setFormatter(DataPyFormatter())
     root_logger.addHandler(file_handler)
     
@@ -352,68 +84,304 @@ def _setup_handlers(context: ExecutionContext) -> None:
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setFormatter(DataPyFormatter())
     root_logger.addHandler(stderr_handler)
-    
-    # Setup console handler for human readable output (if enabled)
-    if context.log_config.get("console_output", False):
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(DataPyConsoleFormatter())
-        console_handler.setLevel(logging.INFO)  # Only INFO and above on console
-        root_logger.addHandler(console_handler)
-    
-    context.loggers_configured = True
 
 
-def get_current_log_file() -> Optional[str]:
+def get_or_create_job_log_file(yaml_name: str) -> str:
     """
-    Get the current log file path.
-    
-    Returns:
-        Path to current log file or None if no active execution
-    """
-    context = get_current_context()
-    return str(context.current_log_path) if context else None
-
-
-def configure_from_globals(globals_config: Dict[str, Any], execution_name: Optional[str] = None) -> str:
-    """
-    Configure logging from global configuration dictionary (legacy support).
+    Find existing or create new log file based on running state.
     
     Args:
-        globals_config: Global configuration containing logging settings
-        execution_name: Name for log file identification
+        yaml_name: Base name of YAML file (without extension)
         
     Returns:
-        Path to created log file
+        Path to log file to use
     """
-    log_config = {}
+    # Ensure directories exist
+    log_base = Path("logs")
+    state_running = log_base / "state" / "running"
+    state_running.mkdir(parents=True, exist_ok=True)
+    log_base.mkdir(exist_ok=True)
     
-    # Extract logging configuration from globals
-    if "log_level" in globals_config:
-        log_config["log_level"] = globals_config["log_level"]
-    if "log_path" in globals_config:
-        log_config["log_path"] = globals_config["log_path"]
-    if "log_format" in globals_config:
-        log_config["log_format"] = globals_config["log_format"]
+    # Look for existing running state files for this yaml
+    pattern = str(state_running / f"{yaml_name}_*.state")
+    existing_states = glob.glob(pattern)
     
-    execution_name = execution_name or "datapy_execution"
-    return start_execution(execution_name, log_config)
+    if existing_states:
+        # Use existing state file (should be only one)
+        state_file = Path(existing_states[0])
+        # Extract execution_id from state filename
+        execution_id = state_file.stem
+        log_file_path = str(log_base / f"{execution_id}.log")
+        
+        # Verify log file exists, create if missing
+        if not Path(log_file_path).exists():
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Log file {log_file_path} missing, creating new one")
+            Path(log_file_path).touch()
+        
+        return log_file_path
+    else:
+        # Create new execution
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        execution_id = f"{yaml_name}_{timestamp}"
+        log_file_path = str(log_base / f"{execution_id}.log")
+        
+        # Create log file
+        Path(log_file_path).touch()
+        return log_file_path
 
 
-def reset_logging():
+def setup_logger(name: str, log_file_path: str, mod_type: Optional[str] = None, mod_name: Optional[str] = None) -> logging.Logger:
+    """
+    Setup logger for specific log file with mod context.
+    
+    Args:
+        name: Logger name (typically __name__)
+        log_file_path: Path to log file
+        mod_type: Type of the mod using this logger (e.g., "csv_reader")
+        mod_name: Name of the mod instance (e.g., "extract_customers")
+        
+    Returns:
+        Configured logger instance
+    """
+    logger = logging.getLogger(name)
+    
+    # Add mod context to all log records from this logger
+    if mod_type or mod_name:
+        # Create a custom filter to add context
+        def add_context(record):
+            if mod_type:
+                record.mod_type = mod_type
+            if mod_name:
+                record.mod_name = mod_name
+            return True
+        
+        logger.addFilter(add_context)
+    
+    return logger
+
+
+def initialize_job_state(state_file_path: str, yaml_file: str, expected_mods: List[str]) -> None:
+    """
+    Create initial state file for new job.
+    
+    Args:
+        state_file_path: Path where state file should be created
+        yaml_file: Name of YAML configuration file
+        expected_mods: List of mod names expected to run
+    """
+    execution_id = Path(state_file_path).stem
+    
+    initial_state = {
+        "execution_id": execution_id,
+        "yaml_file": yaml_file,
+        "expected_mods": expected_mods,
+        "completed_mods": [],
+        "failed_mods": [],
+        "is_complete": False,
+        "started_at": datetime.now().isoformat() + "Z",
+        "last_updated": datetime.now().isoformat() + "Z"
+    }
+    
+    # Ensure directory exists
+    Path(state_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write initial state
+    with open(state_file_path, 'w') as f:
+        json.dump(initial_state, f, indent=2)
+
+
+def update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
+    """
+    Update state file with mod completion (Phase 1: simple atomic operations).
+    
+    Args:
+        state_file_path: Path to state file
+        mod_name: Name of completed mod
+        status: Mod completion status ('success' or 'error')
+    """
+    _update_state_simple(state_file_path, mod_name, status)
+
+
+def _update_state_simple(state_file_path: str, mod_name: str, status: str) -> None:
+    """
+    Simple atomic update using temp file + rename.
+    
+    Args:
+        state_file_path: Path to state file
+        mod_name: Name of completed mod
+        status: Mod completion status
+    """
+    try:
+        # Read current state
+        if not Path(state_file_path).exists():
+            logger = logging.getLogger(__name__)
+            logger.warning(f"State file {state_file_path} missing, cannot update")
+            return
+        
+        with open(state_file_path, 'r') as f:
+            state = json.load(f)
+        
+        # Update state based on status
+        if status == 'success':
+            if mod_name not in state['completed_mods']:
+                state['completed_mods'].append(mod_name)
+        elif status == 'error':
+            if mod_name not in state['failed_mods']:
+                state['failed_mods'].append(mod_name)
+        
+        # Update metadata
+        state['last_updated'] = datetime.now().isoformat() + "Z"
+        state['is_complete'] = set(state['completed_mods']) == set(state['expected_mods'])
+        
+        # Atomic write
+        temp_file = state_file_path + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(state, f, indent=2)
+        os.rename(temp_file, state_file_path)
+        
+    except json.JSONDecodeError as e:
+        # Handle corrupted state file
+        logger = logging.getLogger(__name__)
+        logger.error(f"Corrupted state file {state_file_path}: {e}")
+        
+        # Backup corrupted file
+        backup_path = f"{state_file_path}.corrupted.{int(time.time())}"
+        shutil.copy2(state_file_path, backup_path)
+        logger.error(f"Backed up corrupted state file to {backup_path}")
+        
+        # Cannot update without knowing expected_mods, log the issue
+        logger.error(f"Cannot update state for mod {mod_name} - state file corrupted")
+    
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to update state file {state_file_path}: {e}")
+
+
+def is_job_complete(state_file_path: str) -> bool:
+    """
+    Check if all expected mods have completed.
+    
+    Args:
+        state_file_path: Path to state file
+        
+    Returns:
+        True if job is complete, False otherwise
+    """
+    try:
+        if not Path(state_file_path).exists():
+            return False
+        
+        with open(state_file_path, 'r') as f:
+            state = json.load(f)
+        
+        return state.get('is_complete', False)
+    
+    except (json.JSONDecodeError, Exception):
+        return False
+
+
+def archive_completed_state(running_state_path: str) -> None:
+    """
+    Move state from running/ to completed/ with completion metadata.
+    
+    Args:
+        running_state_path: Path to state file in running directory
+    """
+    try:
+        if not Path(running_state_path).exists():
+            return
+        
+        # Read final state
+        with open(running_state_path, 'r') as f:
+            state = json.load(f)
+        
+        # Add completion metadata
+        state['completed_at'] = datetime.now().isoformat() + "Z"
+        
+        # Create completed directory
+        completed_dir = Path("logs/state/completed")
+        completed_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Move to completed directory
+        completed_path = completed_dir / Path(running_state_path).name
+        
+        # Write final state to completed location
+        with open(completed_path, 'w') as f:
+            json.dump(state, f, indent=2)
+        
+        # Remove from running directory
+        os.unlink(running_state_path)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Archived completed job state to {completed_path}")
+        
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to archive state file {running_state_path}: {e}")
+
+
+def get_running_state_path(yaml_name: str) -> Optional[str]:
+    """
+    Get path to running state file for yaml name.
+    
+    Args:
+        yaml_name: Base name of YAML file
+        
+    Returns:
+        Path to running state file or None if not found
+    """
+    state_running = Path("logs/state/running")
+    pattern = str(state_running / f"{yaml_name}_*.state")
+    existing_states = glob.glob(pattern)
+    
+    return existing_states[0] if existing_states else None
+
+
+def create_state_file_path(yaml_name: str) -> str:
+    """
+    Create path for new state file.
+    
+    Args:
+        yaml_name: Base name of YAML file
+        
+    Returns:
+        Path where new state file should be created
+    """
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    execution_id = f"{yaml_name}_{timestamp}"
+    state_running = Path("logs/state/running")
+    return str(state_running / f"{execution_id}.state")
+
+
+# TODO: Future orchestrator will need file locking for concurrent mod execution
+# TODO: Add _update_state_with_lock() for Phase 2 when parallel execution is implemented
+# TODO: Use fcntl.flock() or similar for cross-process synchronization
+# TODO: Consider distributed locking for multi-server orchestration
+
+def update_job_state_concurrent(state_file_path: str, mod_name: str, status: str) -> None:
+    """
+    Update state file with file locking for concurrent access.
+    
+    TODO: Implement this when orchestrator supports parallel mod execution.
+    Will be needed for:
+    - Parallel mods with same dependencies
+    - Retry/recovery scenarios  
+    - Distributed execution across servers
+    
+    Implementation will use fcntl.flock() or equivalent for safe concurrent access.
+    """
+    raise NotImplementedError("Concurrent state updates not yet implemented - needed for Phase 2 orchestrator")
+
+
+def reset_logging() -> None:
     """
     Reset logging state for testing.
     
     Warning: This should only be used in testing.
     """
-    global _current_context
-    
-    with _context_lock:
-        if _current_context:
-            _current_context.finalize()
-        _current_context = None
-        
-        # Clear all handlers from root logger
-        root_logger = logging.getLogger()
-        for handler in root_logger.handlers[:]:
-            handler.close()
-            root_logger.removeHandler(handler)
+    # Clear all handlers from root logger
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
