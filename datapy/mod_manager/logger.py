@@ -120,13 +120,10 @@ def setup_job_logging(log_file_path: str, log_config: Dict[str, Any]) -> None:
         except (OSError, IOError) as e:
             raise RuntimeError(f"Failed to create log file handler: {e}")
         
-        # Setup stderr handler for JSON output (for machine parsing)
-        try:
-            stderr_handler = logging.StreamHandler(sys.stderr)
-            stderr_handler.setFormatter(DataPyFormatter())
-            root_logger.addHandler(stderr_handler)
-        except Exception as e:
-            raise RuntimeError(f"Failed to create stderr handler: {e}")
+        # REMOVED: stderr handler for clean console output during testing
+        # stderr_handler = logging.StreamHandler(sys.stderr)
+        # stderr_handler.setFormatter(DataPyFormatter())
+        # root_logger.addHandler(stderr_handler)
             
         # Test logging works
         test_logger = logging.getLogger("datapy.logging.test")

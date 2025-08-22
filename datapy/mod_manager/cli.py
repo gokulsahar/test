@@ -185,11 +185,39 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             click.echo(f"Error executing mod: {e}", err=True)
             sys.exit(RUNTIME_ERROR)
         
-        # Output results (keep existing logic)
+        # Create CLI-friendly summary (exclude complex objects)
+        cli_result = {
+            "status": result['status'],
+            "execution_time": result['execution_time'],
+            "exit_code": result['exit_code'],
+            "metrics": result['metrics'],
+            "warnings": result['warnings'],
+            "errors": result['errors'],
+            "logs": result['logs']
+        }
+        
+        # Add artifacts (show file paths, URIs, and simple values)
+        if result['artifacts']:
+            cli_result["artifacts"] = {}
+            for key, value in result['artifacts'].items():
+                if isinstance(value, str):
+                    # File paths, URIs, simple strings
+                    cli_result["artifacts"][key] = value
+                elif isinstance(value, (int, float, bool, list, dict)):
+                    # Simple data types
+                    cli_result["artifacts"][key] = value
+                else:
+                    # Complex objects (DataFrame, etc.) - show type placeholder
+                    cli_result["artifacts"][key] = f"<{type(value).__name__}>"
+        
+        # Add globals (usually just simple values)
+        cli_result["globals"] = result['globals']
+        
+        # Output results
         if quiet:
             click.echo(result['status'])
         else:
-            click.echo(json.dumps(result, indent=2))
+            click.echo(json.dumps(cli_result, indent=2))
         
         # Handle exit code (keep existing logic)
         exit_code = result.get('exit_code', RUNTIME_ERROR)

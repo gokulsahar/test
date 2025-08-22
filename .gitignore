@@ -1,0 +1,151 @@
+# DataPy Framework .gitignore
+
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================================================
+# DataPy Framework Logs & State
+# ============================================================================
+logs/
+test_logs/
+pipeline_logs/
+*.log
+*.state
+state/
+
+# DataPy execution artifacts
+*.backup_*
+temp_*
+
+# ============================================================================
+# Test Data & Outputs
+# ============================================================================
+test_data/
+output/
+processed/
+*_output.csv
+*_cleaned.csv
+*_processed.*
+
+# ============================================================================
+# Development & IDE
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# ============================================================================
+# Environment & Dependencies
+# ============================================================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# Conda
+.conda/
+
+# ============================================================================
+# OS Generated
+# ============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Desktop.ini
+
+# ============================================================================
+# DataPy Specific
+# ============================================================================
+# Temporary registry backups
+mod_registry.json.backup*
+mod_registry.json.corrupted.*
+mod_registry.json.tmp
+
+# Project-specific data directories
+projects/*/data/
+projects/*/output/
+projects/*/logs/
+
+# Development test files
+test_*.py
+demo_*.py
+pipeline_*.py
+
+# ============================================================================
+# Coverage & Testing
+# ============================================================================
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ============================================================================
+# Documentation
+# ============================================================================
+docs/_build/
+docs/build/
+.readthedocs.yml
+
+# ============================================================================
+# Database & Cache
+# ============================================================================
+*.db
+*.sqlite3
+.cache/
+
+# ============================================================================
+# Secrets & Configuration
+# ============================================================================
+secrets/
+config/local_*
+*.key
+*.pem
+*.cert

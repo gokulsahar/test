@@ -11,6 +11,12 @@ import time
 import glob
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
+
+import logging
+import shutil
+from datetime import datetime
+
+
 from .logger import (
     setup_job_logging, setup_logger, archive_completed_state,
     DEFAULT_LOG_CONFIG
@@ -196,11 +202,21 @@ def _add_mod_to_expected_list(state_file_path: str, mod_name: str) -> None:
             state.setdefault('expected_mods', []).append(mod_name)
             state['last_updated'] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
             
-            # Write atomically
+            # Windows-compatible atomic write
             temp_file = state_file_path + '.tmp'
             with open(temp_file, 'w') as f:
                 json.dump(state, f, indent=2)
-            os.rename(temp_file, state_file_path)
+            
+            # Windows atomic replace pattern
+            if os.path.exists(state_file_path):
+                backup_file = state_file_path + '.backup'
+                if os.path.exists(backup_file):
+                    os.unlink(backup_file)
+                os.rename(state_file_path, backup_file)
+                os.rename(temp_file, state_file_path)
+                os.unlink(backup_file)
+            else:
+                os.rename(temp_file, state_file_path)
             
             logger.debug(f"Added mod to expected list", extra={"mod_name": mod_name})
     
@@ -453,6 +469,45 @@ def _validate_mod_result(result: Dict[str, Any]) -> None:
     
     if result['status'] not in ('success', 'warning', 'error'):
         raise RuntimeError(f"Invalid status: {result['status']}")
+
+
+def _validate_mod_execution_inputs(mod_type: str, params: Dict[str, Any], mod_name: str) -> None:
+    """
+    Validate inputs for mod execution.
+    
+    Args:
+        mod_type: Type of mod to execute
+        params: Parameters for the mod
+        mod_name: Unique name for this mod instance
+        
+    Raises:
+        ValueError: If inputs are invalid
+    """
+    if not mod_type or not isinstance(mod_type, str):
+        raise ValueError("mod_type must be a non-empty string")
+    
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary")
+    
+    if not mod_name or not isinstance(mod_name, str):
+        raise ValueError("mod_name must be a non-empty string")
+
+
+def _update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
+    """
+    Update job state (wrapper to handle errors gracefully).
+    
+    Args:
+        state_file_path: Path to state file
+        mod_name: Name of mod
+        status: Status to update
+    """
+    try:
+        update_job_state(state_file_path, mod_name, status)
+    except Exception as e:
+        logger.error(f"Failed to update job state: {e}")
+        # Don't fail the whole execution for state update errors
+
 
 
 def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:

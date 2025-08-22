@@ -17,7 +17,7 @@ def test_basic_csv_reading():
     
     # Test with minimal parameters (required only)
     result = run_mod("csv_reader", {
-        "file_path": "test_data\customers.csv"
+        "file_path": "test_data/customers.csv"
     }, "test_basic_reader")
     
     print(f"Status: {result['status']}")
