@@ -9,15 +9,93 @@ import json
 import sys
 import subprocess
 import os
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 import click
 
-from .sdk import find_or_create_job_files, initialize_job_state_cli, initialize_job_state_sdk
-from .logger import setup_job_logging, setup_logger, is_job_complete_cli, archive_completed_state
+from .logger import (
+    setup_job_logging, setup_logger, is_job_complete_cli, 
+    archive_completed_state, initialize_job_state, DEFAULT_LOG_CONFIG
+)
 from .params import load_job_config
 from .result import VALIDATION_ERROR, RUNTIME_ERROR, SUCCESS, SUCCESS_WITH_WARNINGS
+from .sdk import set_global_config, run_mod
+
+
+def _create_cli_job_files(yaml_name: str) -> tuple[str, str]:
+    """
+    Create job files for CLI execution.
+    
+    Args:
+        yaml_name: Base name from YAML file
+        
+    Returns:
+        Tuple of (log_file_path, state_file_path)
+        
+    Raises:
+        RuntimeError: If file creation fails
+    """
+    try:
+        log_base = Path("logs")
+        state_running = log_base / "state" / "running"
+        
+        # Ensure directories exist
+        state_running.mkdir(parents=True, exist_ok=True)
+        log_base.mkdir(exist_ok=True)
+        
+        # Create new execution files
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        execution_id = f"{yaml_name}_{timestamp}"
+        log_file_path = str(log_base / f"{execution_id}.log")
+        state_file_path = str(state_running / f"{execution_id}.state")
+        
+        # Create log file
+        Path(log_file_path).touch()
+        
+        return log_file_path, state_file_path
+        
+    except Exception as e:
+        raise RuntimeError(f"Failed to create CLI job files: {e}")
+
+
+def _parse_mod_config(config: Dict[str, Any], mod_name: str) -> tuple[str, Dict[str, Any]]:
+    """
+    Parse mod configuration from YAML config.
+    
+    Args:
+        config: Full YAML configuration
+        mod_name: Name of mod to extract
+        
+    Returns:
+        Tuple of (mod_type, mod_params)
+        
+    Raises:
+        ValueError: If mod configuration is invalid
+    """
+    if 'mods' not in config or not isinstance(config['mods'], dict):
+        raise ValueError("YAML file missing or invalid 'mods' section")
+    
+    if mod_name not in config['mods']:
+        available_mods = list(config['mods'].keys())
+        raise ValueError(f"Mod '{mod_name}' not found. Available mods: {available_mods}")
+    
+    mod_config = config['mods'][mod_name]
+    if not isinstance(mod_config, dict):
+        raise ValueError(f"Mod '{mod_name}' configuration must be a dictionary")
+    
+    if '_type' not in mod_config:
+        raise ValueError(f"Mod '{mod_name}' missing required '_type' field")
+    
+    mod_type = mod_config['_type']
+    if not mod_type or not isinstance(mod_type, str):
+        raise ValueError(f"Mod '{mod_name}' _type must be a non-empty string")
+    
+    # Extract parameters (excluding _type)
+    mod_params = {k: v for k, v in mod_config.items() if k != '_type'}
+    
+    return mod_type.strip(), mod_params
 
 
 @click.group()
@@ -55,50 +133,54 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
     log_level = ctx.obj.get('log_level')
     
     try:
-        # Extract yaml_name from params file path
-        yaml_name = Path(params).stem
+        # Validate mod_name
+        if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
+            click.echo("Error: mod_name must be a non-empty string", err=True)
+            sys.exit(VALIDATION_ERROR)
+        
+        mod_name = mod_name.strip()
+        if not mod_name.isidentifier():
+            click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
+            sys.exit(VALIDATION_ERROR)
         
         # Load and validate YAML configuration
         try:
             config = load_job_config(params)
-            
-            if 'mods' not in config or not config['mods']:
-                click.echo(f"Error: YAML file {params} missing or empty 'mods' section", err=True)
-                sys.exit(VALIDATION_ERROR)
-            
-            if mod_name not in config['mods']:
-                click.echo(f"Error: Mod '{mod_name}' not found in {params}", err=True)
-                sys.exit(VALIDATION_ERROR)
-            
-            mod_config = config['mods'][mod_name]
-            if '_type' not in mod_config:
-                click.echo(f"Error: Mod '{mod_name}' missing required '_type' field", err=True)
-                sys.exit(VALIDATION_ERROR)
-            
-            mod_type = mod_config.pop('_type')
-            mod_params = mod_config
+            mod_type, mod_params = _parse_mod_config(config, mod_name)
             
         except Exception as e:
             click.echo(f"Error parsing YAML file {params}: {e}", err=True)
             sys.exit(VALIDATION_ERROR)
         
-        # Setup job files and state management
-        log_file_path, state_file_path = find_or_create_job_files(yaml_name, is_cli=True)
+        # Extract yaml_name for file naming
+        yaml_name = Path(params).stem
         
-        # Initialize CLI state if it doesn't exist
-        if not os.path.exists(state_file_path):
-            initialize_job_state_cli(state_file_path, params)
+        # Setup job files and state management
+        try:
+            log_file_path, state_file_path = _create_cli_job_files(yaml_name)
+            
+            # Initialize CLI state
+            expected_mods = list(config.get('mods', {}).keys())
+            initialize_job_state(state_file_path, params, expected_mods)
+            
+        except Exception as e:
+            click.echo(f"Error setting up execution environment: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
         
         # Setup logging
-        globals_config = config.get('globals', {})
-        if log_level:
-            globals_config['log_level'] = log_level
+        try:
+            globals_config = config.get('globals', {})
+            if log_level:
+                globals_config['log_level'] = log_level
+            
+            setup_job_logging(log_file_path, globals_config)
+            logger = setup_logger(__name__, log_file_path)
+            
+        except Exception as e:
+            click.echo(f"Error setting up logging: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
         
-        setup_job_logging(log_file_path, globals_config)
-        
-        # Setup mod-specific logger
-        logger = setup_logger(__name__, log_file_path)
-        
+        # Output execution info
         if not quiet:
             click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
             click.echo(f"Using parameters from: {params}")
@@ -110,32 +192,25 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             "state_file": state_file_path
         })
         
-        # Import and execute via SDK (which handles all mod execution logic)
-        from .sdk import run_mod, set_global_config
-        
-        # Set global config for SDK
-        set_global_config(globals_config)
-        
-        # Override execution context for CLI (pass yaml_name to SDK)
-        # Note: This is a bit of a hack, but SDK needs to know it's CLI context
-        original_get_execution_context = None
+        # Execute the mod using SDK
         try:
-            import datapy.mod_manager.sdk as sdk_module
-            original_get_execution_context = sdk_module._get_execution_context
-            sdk_module._get_execution_context = lambda: yaml_name
+            # Set global config for SDK
+            set_global_config(globals_config)
             
-            # Execute the mod (CLI gets full result dict)
+            # Execute the mod
             result = run_mod(mod_type, mod_params, mod_name)
             
-        finally:
-            # Restore original function
-            if original_get_execution_context:
-                sdk_module._get_execution_context = original_get_execution_context
+        except Exception as e:
+            click.echo(f"Error executing mod: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
         
         # Check for job completion and archive if complete
-        if is_job_complete_cli(state_file_path):
-            archive_completed_state(state_file_path)
-            logger.info(f"Job completed, archived state file")
+        try:
+            if is_job_complete_cli(state_file_path):
+                archive_completed_state(state_file_path)
+                logger.info("Job completed, archived state file")
+        except Exception as e:
+            logger.warning(f"Failed to archive completed state: {e}")
         
         # Output results
         if quiet:
@@ -186,15 +261,25 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
     log_level = ctx.obj.get('log_level')
     
     try:
+        # Validate script path
         script_file = Path(script_path)
+        if not script_file.is_file():
+            click.echo(f"Error: Script path is not a file: {script_path}", err=True)
+            sys.exit(VALIDATION_ERROR)
         
-        # Use SDK-style state management for scripts
-        execution_context = "sdk_execution"
-        log_file_path, state_file_path = find_or_create_job_files(execution_context, is_cli=False)
+        # Setup execution context
+        script_name = script_file.stem
         
-        # Initialize SDK state if it doesn't exist
-        if not os.path.exists(state_file_path):
-            initialize_job_state_sdk(state_file_path)
+        try:
+            log_file_path, state_file_path = _create_cli_job_files(f"script_{script_name}")
+            
+            # Initialize SDK-style state for scripts
+            from .logger import initialize_job_state
+            initialize_job_state(state_file_path, str(script_path), [])
+            
+        except Exception as e:
+            click.echo(f"Error setting up execution environment: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
         
         # Load parameters and setup globals if provided
         globals_config = {}
@@ -211,9 +296,15 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
             globals_config['log_level'] = log_level
         
         # Setup logging
-        setup_job_logging(log_file_path, globals_config)
-        logger = setup_logger(__name__, log_file_path)
+        try:
+            setup_job_logging(log_file_path, globals_config)
+            logger = setup_logger(__name__, log_file_path)
+            
+        except Exception as e:
+            click.echo(f"Error setting up logging: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
         
+        # Output execution info
         if not quiet:
             click.echo(f"Executing script: {script_path}")
             if params:
@@ -245,11 +336,12 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
                 capture_output=True, 
                 text=True, 
                 cwd=script_file.parent,
-                env=env
+                env=env,
+                timeout=3600  # 1 hour timeout
             )
             
+            # Output script results
             if not quiet:
-                # Print script output
                 if result.stdout:
                     click.echo("--- Script Output ---")
                     click.echo(result.stdout)
@@ -276,6 +368,10 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
                     click.echo("success" if result.returncode == 0 else "warning")
                 sys.exit(result.returncode)
                 
+        except subprocess.TimeoutExpired:
+            logger.error("Script execution timed out after 1 hour")
+            click.echo("Error: Script execution timed out after 1 hour", err=True)
+            sys.exit(RUNTIME_ERROR)
         except Exception as e:
             logger.error(f"Failed to execute script: {e}", exc_info=True)
             click.echo(f"Failed to execute script: {e}", err=True)
@@ -291,9 +387,66 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         sys.exit(RUNTIME_ERROR)
 
 
+@cli.command('list-mods')
+@click.option('--category', type=click.Choice(['sources', 'transformers', 'sinks', 'solos']),
+              help='Filter by mod category')
+@click.pass_context
+def list_mods_command(ctx: click.Context, category: Optional[str]) -> None:
+    """
+    List available DataPy mods.
+    
+    Examples:
+        datapy list-mods
+        datapy list-mods --category sources
+    """
+    quiet = ctx.obj.get('quiet', False)
+    
+    try:
+        import pkgutil
+        import datapy.mods
+        
+        categories = [category] if category else ['sources', 'transformers', 'sinks', 'solos']
+        
+        if not quiet:
+            click.echo("Available DataPy Mods:")
+            click.echo("=" * 50)
+        
+        for cat in categories:
+            try:
+                cat_module = __import__(f'datapy.mods.{cat}', fromlist=[''])
+                mod_names = [name for _, name, ispkg in pkgutil.iter_modules(cat_module.__path__) if not ispkg]
+                
+                if mod_names:
+                    if not quiet:
+                        click.echo(f"\n{cat.upper()}:")
+                        for mod in sorted(mod_names):
+                            click.echo(f"  - {mod}")
+                    else:
+                        for mod in sorted(mod_names):
+                            click.echo(f"{cat}.{mod}")
+                            
+            except ImportError:
+                if not quiet:
+                    click.echo(f"\n{cat.upper()}: No mods found")
+        
+        if not quiet:
+            click.echo("\nUse 'datapy run-mod <mod_name> --params <config.yaml>' to execute a mod")
+            
+    except Exception as e:
+        click.echo(f"Error listing mods: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+
+
 def main() -> None:
     """Main entry point for CLI."""
-    cli()
+    try:
+        cli()
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted by user", err=True)
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        click.echo(f"Unexpected error: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
 
 
 if __name__ == '__main__':

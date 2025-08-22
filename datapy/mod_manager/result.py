@@ -17,8 +17,8 @@ SUCCESS = 0
 SUCCESS_WITH_WARNINGS = 10
 VALIDATION_ERROR = 20
 RUNTIME_ERROR = 30
-TIMEOUT = 40
-CANCELED = 50
+TIMEOUT = 40  # Reserved for future orchestrator
+CANCELED = 50  # Reserved for future orchestrator
 
 
 class ModResult:
@@ -39,57 +39,82 @@ class ModResult:
             mod_name: Unique name for this mod instance (e.g., "customer_data")
             
         Raises:
-            ValueError: If mod_type or mod_name is empty or None
+            ValueError: If mod_type or mod_name is empty or invalid
         """
-        if not mod_type or not isinstance(mod_type, str):
+        if not mod_type or not isinstance(mod_type, str) or not mod_type.strip():
             raise ValueError("mod_type must be a non-empty string")
-        if not mod_name or not isinstance(mod_name, str):
+        if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
             raise ValueError("mod_name must be a non-empty string")
             
-        self.mod_type = mod_type
-        self.mod_name = mod_name
+        self.mod_type = mod_type.strip()
+        self.mod_name = mod_name.strip()
         self.start_time = time.time()
-        self.run_id = f"{mod_type}_{uuid.uuid4().hex[:8]}"
-        self.warnings: List[str] = []
+        self.run_id = f"{self.mod_type}_{uuid.uuid4().hex[:8]}"
+        self.warnings: List[Dict[str, Union[str, int]]] = []
         self.errors: List[Dict[str, Union[str, int]]] = []
         self.metrics: Dict[str, Any] = {}
         self.artifacts: Dict[str, Any] = {}
         self.globals: Dict[str, Any] = {}
     
-    def add_warning(self, message: str) -> None:
+    def add_warning(self, message: str, warning_code: int = SUCCESS_WITH_WARNINGS) -> None:
         """
         Add a warning message to the result.
         
         Args:
             message: Warning description
+            warning_code: Warning severity code (default: SUCCESS_WITH_WARNINGS)
+            
+        Raises:
+            ValueError: If message is empty
         """
-        if message:
-            self.warnings.append(str(message))
-            logger.warning(f"[{self.mod_name}] {message}")
+        if not message or not isinstance(message, str):
+            raise ValueError("warning message cannot be empty")
+            
+        warning_entry = {
+            "message": str(message).strip(),
+            "warning_code": warning_code,
+            "timestamp": time.time()
+        }
+        self.warnings.append(warning_entry)
+        logger.warning(f"[{self.mod_name}] {message} (code: {warning_code})")
     
     def add_error(self, message: str, error_code: int = RUNTIME_ERROR) -> None:
         """
-        Add an error message to the result with error code.
+        Add an error message to the result.
         
         Args:
             message: Error description
             error_code: Error code (use constants: VALIDATION_ERROR, RUNTIME_ERROR, etc.)
+            
+        Raises:
+            ValueError: If message is empty
         """
-        if message:
-            error_entry = {"message": str(message), "error_code": error_code}
-            self.errors.append(error_entry)
-            logger.error(f"[{self.mod_name}] {message} (code: {error_code})")
+        if not message or not isinstance(message, str):
+            raise ValueError("error message cannot be empty")
+            
+        error_entry = {
+            "message": str(message).strip(),
+            "error_code": error_code,
+            "timestamp": time.time()
+        }
+        self.errors.append(error_entry)
+        logger.error(f"[{self.mod_name}] {message} (code: {error_code})")
     
     def add_metric(self, key: str, value: Any) -> None:
         """
         Add a metric key-value pair to the result.
         
         Args:
-            key: Metric name
+            key: Metric name (must be non-empty string)
             value: Metric value (should be JSON serializable)
+            
+        Raises:
+            ValueError: If key is empty
         """
-        if key:
-            self.metrics[str(key)] = value
+        if not key or not isinstance(key, str) or not key.strip():
+            raise ValueError("metric key cannot be empty")
+            
+        self.metrics[key.strip()] = value
     
     def add_artifact(self, key: str, value: Any) -> None:
         """
@@ -102,22 +127,32 @@ class ModResult:
         - uri: Database connections, S3 URIs, API endpoints as strings
         
         Args:
-            key: Artifact identifier
-            value: Artifact value (can be any type - inmemory objects, file paths, URIs, etc.)
+            key: Artifact identifier (must be non-empty string)
+            value: Artifact value (can be any type)
+            
+        Raises:
+            ValueError: If key is empty
         """
-        if key:
-            self.artifacts[str(key)] = value
+        if not key or not isinstance(key, str) or not key.strip():
+            raise ValueError("artifact key cannot be empty")
+            
+        self.artifacts[key.strip()] = value
     
     def add_global(self, key: str, value: Any) -> None:
         """
         Add a global state value for cross-mod communication.
         
         Args:
-            key: Global variable name
+            key: Global variable name (must be non-empty string)
             value: Value to store (should be JSON serializable)
+            
+        Raises:
+            ValueError: If key is empty
         """
-        if key:
-            self.globals[str(key)] = value
+        if not key or not isinstance(key, str) or not key.strip():
+            raise ValueError("global key cannot be empty")
+            
+        self.globals[key.strip()] = value
     
     def success(self) -> Dict[str, Any]:
         """
@@ -163,17 +198,13 @@ class ModResult:
         Raises:
             ValueError: If required fields are missing or invalid
         """
-        execution_time = time.time() - self.start_time
-        
-        # Validation: ensure we have required fields
-        if not self.mod_type:
-            raise ValueError("mod_type cannot be empty")
-        if not self.mod_name:
-            raise ValueError("mod_name cannot be empty")
-        if not self.run_id:
-            raise ValueError("run_id cannot be empty")
         if status not in ("success", "warning", "error"):
-            raise ValueError(f"Invalid status: {status}")
+            raise ValueError(f"Invalid status: {status}. Must be success, warning, or error")
+        
+        if not isinstance(exit_code, int) or exit_code < 0:
+            raise ValueError(f"Invalid exit_code: {exit_code}. Must be non-negative integer")
+        
+        execution_time = time.time() - self.start_time
         
         result = {
             "status": status,
@@ -198,23 +229,42 @@ class ModResult:
         return result
 
 
-# Convenience functions for common exit codes
+# Convenience functions for common error scenarios
 def validation_error(mod_name: str, message: str) -> Dict[str, Any]:
-    """Create a validation error result."""
+    """Create a validation error result for parameter/input validation failures."""
+    if not mod_name or not message:
+        raise ValueError("mod_name and message cannot be empty")
+    
     result = ModResult("unknown", mod_name)
     result.add_error(message, VALIDATION_ERROR)
     return result.error(VALIDATION_ERROR)
 
 
 def runtime_error(mod_name: str, message: str) -> Dict[str, Any]:
-    """Create a runtime error result."""
+    """Create a runtime error result for execution failures."""
+    if not mod_name or not message:
+        raise ValueError("mod_name and message cannot be empty")
+    
     result = ModResult("unknown", mod_name)
     result.add_error(message, RUNTIME_ERROR)
     return result.error(RUNTIME_ERROR)
 
 
 def timeout_error(mod_name: str, message: str) -> Dict[str, Any]:
-    """Create a timeout error result."""
+    """Create a timeout error result (reserved for future orchestrator)."""
+    if not mod_name or not message:
+        raise ValueError("mod_name and message cannot be empty")
+    
     result = ModResult("unknown", mod_name)
     result.add_error(message, TIMEOUT)
     return result.error(TIMEOUT)
+
+
+def canceled_error(mod_name: str, message: str) -> Dict[str, Any]:
+    """Create a canceled error result (reserved for future orchestrator)."""
+    if not mod_name or not message:
+        raise ValueError("mod_name and message cannot be empty")
+    
+    result = ModResult("unknown", mod_name)
+    result.add_error(message, CANCELED)
+    return result.error(CANCELED)
