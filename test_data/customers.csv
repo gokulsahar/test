@@ -1,4 +1,7 @@
-id,name,email,age
-1,John Doe,john@email.com,25
-2,Jane Smith,jane@email.com,30
-3,Bob Johnson,bob@email.com,35
+id,name,email,age,city
+1,John Doe,john@email.com,25,New York
+2,Jane Smith,jane@email.com,30,
+3,Bob Johnson,bob@email.com,35,Chicago
+3,Bob Johnson,bob@email.com,35,Chicago
+4,,alice@email.com,28,Boston
+5,Charlie Brown,charlie@email.com,,Seattle
