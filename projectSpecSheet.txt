@@ -1,34 +1,26 @@
-# DataPy Framework Specification
-
-## Overview
-A Python framework for creating reusable, Talend-like ETL components that can be invoked from both CLI (Autosys/DataStage) and other Python scripts. The framework provides unified parameter management, logging, and result handling.
-
-## Repository Structure
-```
+DataPy Framework - Updated Project Specification
+Overview
+A Python framework for creating reusable, registry-based ETL components that can be invoked from both CLI (Autosys/DataStage) and other Python scripts. The framework provides unified parameter management, logging, result handling, and a centralized mod registry for fast discovery and execution.
+Repository Structure
 ├── datapy/                     # Framework (Org-Level)
+│   ├── mod_registry.json       # Central mod registry (single source of truth)
 │   ├── mod_manager/            # Framework engine
 │   │   ├── __init__.py
-│   │   ├── cli.py              # CLI runner
-│   │   ├── sdk.py              # Python SDK
-│   │   ├── logger.py           # Common logging
-│   │   ├── params.py           # Parameter management + project config discovery
-│   │   ├── result.py           # ModResult interface
-│   │   └── base.py             # Base classes
+│   │   ├── registry.py         # NEW: Registry interface and management
+│   │   ├── cli.py              # CLI runner (updated with registry)
+│   │   ├── sdk.py              # Python SDK (updated with registry)
+│   │   ├── logger.py           # Common logging (keep as-is)
+│   │   ├── params.py           # Parameter management + project config discovery (keep as-is)
+│   │   ├── result.py           # ModResult interface (keep as-is)
+│   │   └── base.py             # Base classes (keep as-is)
 │   ├── __main__.py             # Enable python -m datapy execution
 │   ├── mods/                   # All reusable mods (shared by everyone)
 │   │   ├── sources/
-│   │   │   ├── csv_reader.py
-│   │   │   ├── api_client.py
-│   │   │   └── database_reader.py
+│   │   │   └── csv_reader.py   # Sample mod
 │   │   ├── transformers/
-│   │   │   ├── data_cleaner.py
-│   │   │   └── validator.py
-│   │   ├── sinks/
-│   │   │   ├── database_writer.py
-│   │   │   └── s3_uploader.py
-│   │   └── solos/
-│   │       ├── file_validator.py
-│   │       └── data_quality_checker.py
+│   │   │   └── data_cleaner.py # Sample mod
+│   │   └── sinks/
+│   │       └── csv_writer.py   # Sample mod
 │   ├── utils/                  # Common utility functions (not mods)
 │   │   ├── __init__.py
 │   │   ├── file_utils.py
@@ -38,429 +30,294 @@ A Python framework for creating reusable, Talend-like ETL components that can be
 │       ├── mod_manager/
 │       └── mods/
 │
-├── projects/                   # All Projects
+├── projects/                   # All Projects (user projects)
 │   ├── customer-analytics/
 │   │   ├── project_defaults.yaml
 │   │   └── jobs/
 │   │       ├── daily-etl/
 │   │       │   ├── daily_customer_etl.py      # Python orchestration
 │   │       │   └── daily_customer_etl.yaml    # CLI config
-│   │       ├── weekly-reports/
-│   │       │   ├── weekly_reports.py
-│   │       │   └── weekly_reports.yaml
-│   │       └── data-quality/
-│   │           └── data_quality_check.yaml
-│   │
-│   ├── finance-reporting/
-│   │   ├── project_defaults.yaml
-│   │   └── jobs/
-│   │       ├── monthly-close/
-│   │       │   ├── monthly_close.py
-│   │       │   └── monthly_close.yaml
-│   │       └── daily-reconciliation/
-│   │           └── daily_recon.yaml
-│   │
-│   └── sales-analytics/
-│       ├── project_defaults.yaml
-│       └── jobs/
-│           ├── lead-scoring/
-│           │   └── lead_scoring.py
-│           └── pipeline-analysis/
-│               └── pipeline_analysis.yaml
+│   │       └── weekly-reports/
+│   │           ├── weekly_reports.py
+│   │           └── weekly_reports.yaml
 ├── setup.py
 ├── requirements.txt
 └── README.md
-```
-
-## Core Framework Components
-
-### 1. Common Result Interface
-**ModResult Class** provides consistent output format across all mods:
-
-```python
-# datapy/mod_manager/result.py
-from typing import Dict, List, Optional, Any
-import time
-import uuid
-
-class ModResult:
-    def __init__(self, mod_name: str):
-        self.mod_name = mod_name
-        self.start_time = time.time()
-        self.run_id = f"{mod_name}_{uuid.uuid4().hex[:8]}"
-        self.warnings = []
-        self.errors = []
-        self.metrics = {}
-        self.artifacts = {}
-        self.globals = {}
+NEW: Registry System
+1. Central Mod Registry (mod_registry.json)
+Single source of truth for all available mods with metadata, schemas, and discovery info:
+json{
+  "_metadata": {
+    "version": "1.0.0",
+    "created": "2024-08-22",
+    "description": "DataPy Central Mod Registry"
+  },
+  "mods": {
+    "csv_reader": {
+      "module_path": "datapy.mods.sources.csv_reader",
+      "metadata": {
+        "type": "csv_reader",
+        "version": "1.0.0",
+        "description": "Reads CSV files with validation and format conversion",
+        "category": "sources",
+        "author": "DataPy Team"
+      },
+      "interface": {
+        "input_ports": [],
+        "output_ports": ["data"],
+        "globals_produced": ["row_count", "file_size"],
+        "globals_consumed": ["base_path", "encoding"]
+      },
+      "dependencies": {
+        "packages": ["pandas>=1.5.0", "chardet>=4.0.0"],
+        "python_version": ">=3.8"
+      },
+      "config_schema": {
+        "type": "object",
+        "required": ["file_path"],
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to CSV file"
+          },
+          "encoding": {
+            "type": "string",
+            "default": "utf-8",
+            "description": "File encoding",
+            "enum": ["utf-8", "latin-1", "cp1252"]
+          },
+          "delimiter": {
+            "type": "string",
+            "default": ",",
+            "description": "CSV delimiter character"
+          }
+        }
+      }
+    }
+  }
+}
+2. Registry Manager (registry.py)
+Core registry functionality for mod discovery, validation, and execution:
+pythonclass ModRegistry:
+    def __init__(self):
+        self.registry = self._load_registry()
     
-    def add_warning(self, message: str):
-        self.warnings.append(message)
+    # Core runtime functions (fast execution)
+    def get_mod_info(self, mod_type: str) -> dict
+    def validate_params_schema(self, mod_type: str, params: dict) -> dict
+    def execute_mod(self, mod_type: str, params: dict, mod_name: str) -> dict
+    def list_available_mods(self, category: str = None) -> list
     
-    def add_error(self, message: str):
-        self.errors.append(message)
+    # Registry management functions
+    def register_mod(self, mod_path: str) -> bool
+    def validate_mod_structure(self, mod_path: str) -> bool
+    def update_registry(self, registry_data: dict) -> bool
     
-    def add_metric(self, key: str, value: Any):
-        self.metrics[key] = value
-    
-    def add_artifact(self, key: str, path: str):
-        self.artifacts[key] = path
-    
-    def add_global(self, key: str, value: Any):
-        self.globals[key] = value  # Shared state values
-    
-    def success(self) -> Dict:
-        return self._build_result("success")
-    
-    def warning(self) -> Dict:
-        return self._build_result("warning")
-    
-    def error(self, exit_code: int = 30) -> Dict:
-        return self._build_result("error", exit_code)
-```
+    # Internal helpers
+    def _load_registry(self) -> dict
+    def _save_registry(self, registry_data: dict) -> bool
+    def _import_mod_module(self, module_path: str) -> object
+3. Enhanced CLI with Registry Commands
+Updated CLI interface with registry management:
+bash# Existing commands (keep same interface)
+python -m datapy run-mod extract_customers --params daily_job.yaml
+python -m datapy run-script my_pipeline.py --params config.yaml
 
-### 2. Required Metadata Enforcement
-**BaseModParams** enforces required metadata for all mods:
-
-```python
-# datapy/mod_manager/base.py
-from pydantic import BaseModel, Field
-from typing import List, Optional
-
-class ModMetadata(BaseModel):
-    name: str = Field(..., description="Mod name")
-    version: str = Field(..., description="Mod version (semver)")
-    description: str = Field(..., description="Mod description")
-    author: Optional[str] = Field(None, description="Mod author")
-
-class BaseModParams(BaseModel):
-    _metadata: ModMetadata = Field(..., description="Required mod metadata")
-    
-    class Config:
-        fields = {'_metadata': {'exclude': True}}
-```
-
-### 3. Mods (Reusable Components)
-Each mod is a Python module with:
-- **Required metadata** (name, version, description) for tracking
-- **Pydantic Params class** inheriting from BaseModParams
-- **run() function** that executes the mod logic  
-- **ModResult interface** for consistent output format
-
-**Example Mod Structure:**
-```python
-# mods/sources/csv_reader.py
-from datapy.mod_manager.base import BaseModParams, ModMetadata
-from datapy.mod_manager.result import ModResult
-from typing import Optional
-
-# Required metadata for all mods
-METADATA = ModMetadata(
-    name="csv_reader",
-    version="1.0.0",
-    description="Reads CSV files with validation and format conversion"
-)
-
-class Params(BaseModParams):
-    _metadata: ModMetadata = METADATA
-    
-    input_path: str
-    delimiter: str = ","
-    encoding: Optional[str] = "utf-8"
-
-def run(params: Params):
-    result = ModResult("csv_reader")
-    
-    try:
-        # Mod logic here
-        result.add_metric("rows_processed", 10000)
-        result.add_artifact("output_data", "/path/to/output.parquet")
-        
-        return result.success()
-    except Exception as e:
-        result.add_error(str(e))
-        return result.error(exit_code=30)
-```
-
-### 4. CLI Interface
-**Mod Execution:**
-```bash
-# Direct mod with params
-python -m datapy run-mod datapy.mods.sources.csv_reader --params params.yaml
-```
-
-**Script Execution:**
-```bash
-# Run any Python script with framework features
-python -m datapy run-script /path/to/user_script.py --params params.yaml
-```
-
-### 5. Python SDK
-```python
+# NEW: Registry management commands
+python -m datapy list-registry                    # List all registered mods
+python -m datapy list-registry --category sources # List by category
+python -m datapy register-mod datapy.mods.sources.csv_reader  # Register new mod
+python -m datapy validate-registry               # Validate registry integrity
+python -m datapy mod-info csv_reader            # Show detailed mod info
+4. Enhanced SDK with Registry Integration
+Updated Python SDK with registry-based execution (same API, faster performance):
+python# Existing API (unchanged)
 from datapy.mod_manager.sdk import set_global_config, run_mod
 
-# Set global configuration once
 set_global_config({
     "base_path": "/data/2024-08-12",
     "log_level": "DEBUG",
     "log_path": "/logs/etl/"
 })
 
-# Run mods with minimal params
-result = run_mod("datapy.mods.sources.csv_reader", {
-    "input_path": "customers.csv",
+# Fast registry-based execution
+result = run_mod("csv_reader", {
+    "file_path": "customers.csv",
     "delimiter": "|"
-})
-```
+}, "extract_customers")
 
-## Parameter Management
+# NEW: Registry query functions
+from datapy.mod_manager.registry import ModRegistry
+registry = ModRegistry()
+available_mods = registry.list_available_mods(category="sources")
+mod_info = registry.get_mod_info("csv_reader")
+Updated Execution Flow
+Registry-Based Execution (Fast Path):
+CLI/SDK → Registry.get_mod_info() → Schema validation → Import & Execute → ModResult
+Benefits Over Previous System:
 
-### Project-Level Configuration
-Each project has its own configuration hierarchy with clear inheritance:
+🚀 Performance: No import discovery, direct module loading
+📋 Schema Validation: JSON schema validation instead of Pydantic classes
+🎯 Simple Discovery: Single registry lookup vs. filesystem scanning
+⚡ Fast Startup: Pre-validated mods, no runtime metadata validation
+🛠️ Admin Friendly: Simple registration process
 
-**Parameter Resolution Chain:**
-**Mod Defaults (in .py file) → Project Defaults → Job Mod Params**
+Mod Structure (Simplified)
+Registry-Compliant Mod Example:
+python# datapy/mods/sources/csv_reader.py
+from datapy.mod_manager.result import ModResult
 
-**Project Defaults Configuration:**
-```yaml
-# projects/customer-analytics/project_defaults.yaml
+def run(params):
+    """
+    Pure business logic - metadata handled by registry.
+    
+    Args:
+        params: Dictionary with validated parameters from registry schema
+        
+    Returns:
+        ModResult dictionary
+    """
+    result = ModResult("csv_reader", params.get("_mod_name", "unknown"))
+    
+    try:
+        import pandas as pd
+        
+        df = pd.read_csv(
+            params["file_path"], 
+            encoding=params.get("encoding", "utf-8"),
+            delimiter=params.get("delimiter", ",")
+        )
+        
+        result.add_metric("rows_read", len(df))
+        result.add_metric("columns_read", len(df.columns))
+        result.add_artifact("data", df)
+        result.add_global("row_count", len(df))
+        
+        return result.success()
+        
+    except FileNotFoundError as e:
+        result.add_error(f"File not found: {e}")
+        return result.error(20)  # VALIDATION_ERROR
+    except Exception as e:
+        result.add_error(f"CSV reading failed: {e}")
+        return result.error(30)  # RUNTIME_ERROR
+Registry Management Workflow
+1. Mod Registration Process:
+bash# 1. Create mod file
+# 2. Register mod
+python -m datapy register-mod datapy.mods.sources.csv_reader
+
+# Registration validates:
+# - Module can be imported
+# - Has run() function with correct signature  
+# - Metadata is valid
+# - Schema is valid JSON schema
+# - Dependencies are resolvable
+2. Registry Validation:
+bash# Validate entire registry
+python -m datapy validate-registry
+
+# Checks:
+# - All registered mods can be imported
+# - All schemas are valid JSON schema
+# - No duplicate mod types
+# - All dependencies are available
+Parameter Resolution (Unchanged)
+Resolution Chain:
+Mod Defaults (registry schema defaults) → Project Defaults → Job Mod Params
+Project Configuration (Keep Current System):
+yaml# projects/customer-analytics/project_defaults.yaml
 project_name: "customer_analytics"
 project_version: "2.1.0"
 
-# Project-specific mod defaults
 mod_defaults:
-  api_client:
-    endpoint: "https://customer-analytics-api.internal.com"
-    timeout: 60
-    auth_method: "oauth2"
-  
-  database_reader:
-    connection_string: "postgresql://analytics-db:5432/customer_data"
-    pool_size: 20
-    
   csv_reader:
     encoding: "utf-8"
     base_path: "/data/customer_analytics"
 
-# Project logging settings
 logging:
   base_path: "/logs/customer_analytics"
   retention_days: 30
-```
-
-**Job Config File (job_config.yaml):**
-```yaml
-# projects/customer-analytics/jobs/daily-etl/daily_customer_etl.yaml
+Job Configuration:
+yaml# projects/customer-analytics/jobs/daily-etl/daily_customer_etl.yaml
 globals:
   base_path: "/data/2024-08-12"
   log_level: "DEBUG"
-  log_path: "/logs/etl/"
-  log_format: "json"
-  encoding: "utf-8"
 
 mods:
-  csv_reader:
-    input_path: "customers.csv"  # Inherits base_path from project defaults
+  extract_customers:          # mod_name (unique instance)
+    _type: csv_reader         # mod_type (registry lookup)
+    file_path: "customers.csv"
     delimiter: "|"
   
-  data_cleaner:
-    null_strategy: "drop"
-    min_length: 3
-  
-  database_writer:
-    table_name: "customers"  # Inherits connection_string from project defaults
-    batch_size: 1000
-```
-
-**Parameter Resolution:**
-- Mods inherit project-level defaults
-- Job globals override project settings  
-- Local mod params override all previous levels
-- Required metadata enforced for all mods
-- Variable substitution: `${globals.base_path}`
-
-**Configuration Discovery:**
-Framework automatically discovers project configuration using convention-based search:
-1. `./project_defaults.yaml` (current working directory)
-2. `../project_defaults.yaml` (parent directory - for jobs in subfolders)
-3. `../../project_defaults.yaml` (for deeply nested job structures)
-4. No project config found (use only mod defaults)
-
-## Standard Result Format
-
-**Success Response:**
-```python
-{
+  extract_orders:             # different instance, same mod type
+    _type: csv_reader         
+    file_path: "orders.csv"
+Standard Result Format (Unchanged)
+Success Response:
+python{
     "status": "success",        # success, warning, error
     "execution_time": 2.34,     # seconds
+    "exit_code": 0,
     "metrics": {
         "rows_processed": 10000,
-        "rows_output": 9876,
-        "memory_used_mb": 45.2
+        "rows_output": 9876
     },
     "artifacts": {
-        "output_data": "/data/processed/customers_clean.parquet",
-        "metadata": "/data/processed/customers_clean.metadata.json"
+        "data": pandas_dataframe,
+        "output_file": "/data/processed/customers_clean.csv"
     },
-    "globals": {                # Shared state for cross-mod communication
+    "globals": {
         "batch_id": "BATCH_20240812_001",
-        "total_records": 10000,
-        "processing_date": "2024-08-12"
+        "total_records": 10000
     },
-    "warnings": [
-        "Found 124 duplicate records, removed automatically"
-    ],
+    "warnings": [],
     "errors": [],
     "logs": {
         "log_file": "/logs/etl/customer_etl_job_20240812_143022.log",
-        "session_id": "session-uuid-12345",
-        "run_id": "component-uuid-67890"
+        "run_id": "csv_reader_a1b2c3d4",
+        "mod_type": "csv_reader",
+        "mod_name": "extract_customers"
     }
 }
-```
+Implementation Phases (End at Phase 3)
+Phase 1: Registry Foundation
 
-**Error Response:**
-```python
-{
-    "status": "error",
-    "execution_time": 0.5,
-    "errors": ["File not found: /data/missing_file.csv"],
-    "exit_code": 20,
-    "globals": {},              # Empty but present for consistency
-    "logs": {
-        "log_file": "/logs/etl/customer_etl_job_20240812_143022.log",
-        "session_id": "session-uuid-12345",
-        "run_id": "component-uuid-67890"
-    }
-}
-```
+✅ Create mod_registry.json structure
+✅ Implement registry.py core functionality
+✅ Add registry CLI commands
+✅ Validate registry system works
 
-## Logging Framework
+Phase 2: Integration (Non-Breaking)
 
-### Consolidated Logging Strategy
-- **Single log file per execution session** - all components log to same file
-- **JSON structured logging** to stderr for machine parsing
-- **Smart log file naming**:
-  - CLI execution: Uses YAML config filename (e.g., `customer_etl_job.log`)
-  - Python script: Uses Python script filename (e.g., `my_pipeline.log`)
-- **Configurable log levels** via globals or CLI
-- **Automatic context** (mod name, run ID, timestamp, session ID)
+✅ Update sdk.py to use registry (keep same API)
+✅ Update cli.py to use registry for mod discovery
+✅ Ensure all existing usage patterns still work
+✅ No fallback needed - registry is primary
 
-**Log File Naming:**
-```bash
-# CLI execution
-python -m datapy run-job customer_etl_job.yaml csv_reader
-# → Creates: /logs/etl/customer_etl_job_20240812_143022.log
+Phase 3: Optimization & Samples
 
-# Python script execution
-python my_data_pipeline.py
-# → Creates: /logs/etl/my_data_pipeline_20240812_143022.log
-```
+✅ Optimize sdk.py performance (break down large functions)
+✅ Create 3 sample mods and register them
+✅ Final performance and functionality validation
+✅ PRODUCTION READY STATE
 
-**Usage:**
-```python
-from datapy.mod_manager.logger import setup_logger
+Updated Dependencies
+txt# Core dependencies (unchanged)
+pydantic>=2.0.0
+PyYAML>=6.0
+click>=8.0.0
 
-# Logger automatically detects session and writes to consolidated file
-logger = setup_logger(__name__)
-logger.info("Processing started", extra={"rows": 1000, "component": "csv_reader"})
-```
+# NEW: JSON schema validation
+jsonschema>=4.0.0
+Key Design Principles (Enhanced)
 
-**CLI Log Level Control:**
-```bash
-python -m datapy run-job job_config.yaml csv_reader --log-level DEBUG
-```
-
-## Exit Codes (for CLI)
-- **0**: Success
-- **10**: Success with warnings
-- **20**: Validation error (bad parameters)
-- **30**: Runtime error
-- **40**: Timeout
-- **50**: Canceled
-
-## Usage Examples
-
-### CLI Usage (DataStage/Autosys)
-```bash
-# Execute from project directory
-cd projects/customer-analytics
-
-# Direct mod execution
-python -m datapy run-mod datapy.mods.sources.csv_reader --params params.yaml
-
-# Custom script execution
-python -m datapy run-script jobs/daily-etl/daily_customer_etl.py --params custom_params.yaml
-```
-
-### Python Script Usage
-```python
-# projects/customer-analytics/jobs/daily-etl/daily_customer_etl.py
-from datapy.mod_manager.sdk import set_global_config, run_mod
-
-# Set job-level configuration
-set_global_config({
-    "base_path": "/data/2024-08-12",
-    "log_level": "INFO",
-    "log_path": "/logs/customer_etl/"
-})
-
-# Execute mod pipeline using framework mods
-csv_result = run_mod("datapy.mods.sources.csv_reader", {
-    "input_path": "customers.csv",
-    "delimiter": "|"
-})
-
-if csv_result["status"] == "success":
-    clean_result = run_mod("datapy.mods.transformers.data_cleaner", {
-        "input_artifact": csv_result["artifacts"]["output_data"],
-        "null_strategy": "drop"
-    })
-    
-    if clean_result["status"] == "success":
-        load_result = run_mod("datapy.mods.sinks.database_writer", {
-            "input_artifact": clean_result["artifacts"]["output_data"],
-            "table_name": "customers"
-        })
-```
-
-## Key Design Principles
-
-1. **Single Responsibility**: Each mod does one thing well
-2. **Centralized Mods**: All teams contribute to and use shared `datapy/mods/`
-3. **Project Independence**: Each project has its own configuration and jobs
-4. **Flexible Job Structure**: Support both Python scripts and YAML configs
-5. **Clear Inheritance**: Project defaults → Job globals → Mod params
-6. **Consistency**: Same interface for CLI and Python usage
-7. **Validation**: Pydantic ensures parameter correctness
-8. **Metadata Enforcement**: Required versioning and documentation
-9. **Observability**: Structured logging and standard results
-10. **Simplicity**: Convention-based configuration discovery
-11. **Future-Ready**: Job folder structure supports future orchestration
-12. **Future Extensibility**: Framework supports adding orchestration/engine layer without touching existing mod framework
-
-## Implementation Priority
-
-### Phase 1 (Urgent - Layer 1)
-1. **Mod Manager SDK** with project config management
-2. **CLI runner** for direct mod execution and script execution
-3. **Common logger** with JSON structured output
-4. **ModResult interface** for consistent outputs
-5. **Standard mod examples** (CSV reader, data cleaner, database writer)
-6. **Project structure** setup and convention-based config discovery
-
-### Phase 2 (Layer 2 - Future)
-1. **Job configuration runner** (`run-job` command for YAML-based orchestration)
-2. **Artifact manager** for data lineage tracking
-3. **Web UI** for mod discovery
-4. **Advanced orchestration** features
-5. **Performance monitoring** and metrics
-6. **Engine/Orchestration Layer** (`datapy/engine/` - DAG execution, workflow management)
-
-## Dependencies
-- **Pydantic**: Parameter validation and schema generation
-- **PyYAML**: Configuration file parsing
-- **Click**: CLI framework (optional, can use argparse)
-- **Standard library**: logging, importlib, sys
-
-This specification provides a complete blueprint for building a production-ready, scalable ETL mod framework that bridges the gap between scheduled jobs and custom Python development.
+Registry-First: All mod discovery via central registry
+No Fallbacks: Registry is the single source of truth
+Fast Execution: Pre-validated mods, minimal runtime overhead
+Backward Compatible: All existing APIs unchanged
+Simple Registration: Easy mod registration process
+Schema-Driven: JSON schema validation for parameters
+Admin Friendly: Simple registry management commands
+Single Responsibility: Registry handles discovery, mods handle business logic
+Production Ready: Comprehensive error handling and validation
