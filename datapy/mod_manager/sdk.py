@@ -1,27 +1,15 @@
 """
 Python SDK for DataPy framework with registry-based mod execution.
 
-Provides clean API for mod execution with registry lookup,
-state-based logging and future orchestrator support.
+Provides clean API for mod execution with console logging only.
+No file management - simple console output for shell script capture.
 """
 
-import os
-import json
 import time
-import glob
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
-import logging
-import shutil
-from datetime import datetime
-
-
-from .logger import (
-    setup_job_logging, setup_logger, archive_completed_state,
-    DEFAULT_LOG_CONFIG
-)
-from .params import create_resolver, load_job_config
+from .logger import setup_console_logging, setup_logger, DEFAULT_LOG_CONFIG
+from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
 from .registry import get_registry
 
@@ -47,6 +35,12 @@ def set_global_config(config: Dict[str, Any]) -> None:
         raise ValueError("config must be a dictionary")
     
     _global_config.update(config)
+    
+    # Setup console logging with new config
+    log_config = DEFAULT_LOG_CONFIG.copy()
+    log_config.update(_global_config)
+    setup_console_logging(log_config)
+    
     logger.debug(f"Updated global config", extra={"config_keys": list(config.keys())})
 
 
@@ -67,289 +61,18 @@ def clear_global_config() -> None:
     logger.debug("Cleared global config")
 
 
-def _get_execution_context() -> str:
+def _auto_generate_mod_name(mod_type: str) -> str:
     """
-    Get execution context for logging and state management.
-    
-    Returns:
-        Execution context identifier
-    """
-    # Simplified context detection - no complex frame inspection
-    return "sdk_execution"
-
-
-def _find_or_create_job_files(execution_context: str, is_cli: bool = False) -> Tuple[str, str]:
-    """
-    Find existing or create new job files based on context.
+    Auto-generate mod name from mod type and timestamp.
     
     Args:
-        execution_context: Context identifier for the execution
-        is_cli: Whether this is CLI execution
+        mod_type: Type of mod being executed
         
     Returns:
-        Tuple of (log_file_path, state_file_path)
-        
-    Raises:
-        RuntimeError: If file creation fails
+        Auto-generated mod name
     """
-    try:
-        log_base = Path(_global_config.get('log_path', 'logs'))
-        state_running = log_base / "state" / "running"
-        
-        # Ensure directories exist
-        state_running.mkdir(parents=True, exist_ok=True)
-        log_base.mkdir(exist_ok=True)
-        
-        # Look for existing state files for this context
-        pattern = str(state_running / f"{execution_context}_*.state")
-        existing_states = glob.glob(pattern)
-        
-        if existing_states:
-            # Use existing execution
-            state_file_path = existing_states[0]
-            execution_id = Path(state_file_path).stem
-            log_file_path = str(log_base / f"{execution_id}.log")
-            
-            # Ensure log file exists
-            if not Path(log_file_path).exists():
-                Path(log_file_path).touch()
-            
-            return log_file_path, state_file_path
-        else:
-            # Create new execution
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            execution_id = f"{execution_context}_{timestamp}"
-            log_file_path = str(log_base / f"{execution_id}.log")
-            state_file_path = str(state_running / f"{execution_id}.state")
-            
-            # Create log file
-            Path(log_file_path).touch()
-            
-            return log_file_path, state_file_path
-            
-    except Exception as e:
-        raise RuntimeError(f"Failed to create job files: {e}")
-
-
-def _initialize_job_state_sdk(state_file_path: str) -> None:
-    """
-    Initialize job state for SDK execution.
-    
-    Args:
-        state_file_path: Path to state file
-        
-    Raises:
-        RuntimeError: If state initialization fails
-    """
-    try:
-        execution_id = Path(state_file_path).stem
-        
-        initial_state = {
-            "execution_id": execution_id,
-            "yaml_file": None,
-            "expected_mods": [],
-            "completed_mods": [],
-            "failed_mods": [],
-            "is_complete": False,
-            "mode": "sdk",
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        }
-        
-        # Ensure directory exists
-        Path(state_file_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write state atomically
-        temp_file = state_file_path + '.tmp'
-        with open(temp_file, 'w') as f:
-            json.dump(initial_state, f, indent=2)
-        os.rename(temp_file, state_file_path)
-        
-        logger.info(f"Initialized SDK job state", extra={"state_file": state_file_path})
-        
-    except Exception as e:
-        # Clean up partial files
-        for temp_path in [state_file_path + '.tmp', state_file_path]:
-            try:
-                if Path(temp_path).exists():
-                    os.unlink(temp_path)
-            except:
-                pass
-        raise RuntimeError(f"Failed to initialize SDK job state: {e}")
-
-
-def _add_mod_to_expected_list(state_file_path: str, mod_name: str) -> None:
-    """
-    Add mod to expected list in state file for SDK tracking.
-    
-    Args:
-        state_file_path: Path to state file
-        mod_name: Name of mod to add
-    """
-    try:
-        if not Path(state_file_path).exists():
-            logger.warning(f"State file does not exist: {state_file_path}")
-            return
-        
-        with open(state_file_path, 'r') as f:
-            state = json.load(f)
-        
-        if not isinstance(state, dict):
-            logger.warning(f"Invalid state file format: {state_file_path}")
-            return
-        
-        if mod_name not in state.get('expected_mods', []):
-            state.setdefault('expected_mods', []).append(mod_name)
-            state['last_updated'] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            
-            # Windows-compatible atomic write
-            temp_file = state_file_path + '.tmp'
-            with open(temp_file, 'w') as f:
-                json.dump(state, f, indent=2)
-            
-            # Windows atomic replace pattern
-            if os.path.exists(state_file_path):
-                backup_file = state_file_path + '.backup'
-                if os.path.exists(backup_file):
-                    os.unlink(backup_file)
-                os.rename(state_file_path, backup_file)
-                os.rename(temp_file, state_file_path)
-                os.unlink(backup_file)
-            else:
-                os.rename(temp_file, state_file_path)
-            
-            logger.debug(f"Added mod to expected list", extra={"mod_name": mod_name})
-    
-    except Exception as e:
-        logger.warning(f"Failed to add mod {mod_name} to expected list: {e}")
-
-
-def update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
-    """
-    Update state file with mod completion (atomic operation).
-    
-    Args:
-        state_file_path: Path to state file
-        mod_name: Name of completed mod
-        status: Mod completion status ('success', 'warning', or 'error')
-        
-    Raises:
-        RuntimeError: If state update fails
-    """
-    if not state_file_path or not isinstance(state_file_path, str):
-        raise RuntimeError("state_file_path must be a non-empty string")
-    
-    if not mod_name or not isinstance(mod_name, str):
-        raise RuntimeError("mod_name must be a non-empty string")
-    
-    if status not in ('success', 'warning', 'error'):
-        raise RuntimeError(f"Invalid status: {status}. Must be success, warning, or error")
-    
-    try:
-        # Read current state
-        if not Path(state_file_path).exists():
-            raise RuntimeError(f"State file does not exist: {state_file_path}")
-        
-        with open(state_file_path, 'r') as f:
-            state = json.load(f)
-        
-        if not isinstance(state, dict):
-            raise RuntimeError(f"Invalid state file format: {state_file_path}")
-        
-        # Update state based on status
-        if status in ('success', 'warning'):
-            if mod_name not in state.get('completed_mods', []):
-                state.setdefault('completed_mods', []).append(mod_name)
-        elif status == 'error':
-            if mod_name not in state.get('failed_mods', []):
-                state.setdefault('failed_mods', []).append(mod_name)
-        
-        # Update metadata
-        state['last_updated'] = datetime.now().isoformat() + "Z"
-        expected_mods = set(state.get('expected_mods', []))
-        completed_mods = set(state.get('completed_mods', []))
-        state['is_complete'] = len(expected_mods) > 0 and expected_mods == completed_mods
-        
-        # Windows-compatible atomic write
-        temp_file = state_file_path + '.tmp'
-        with open(temp_file, 'w') as f:
-            json.dump(state, f, indent=2)
-        
-        # Windows atomic replace pattern
-        if os.path.exists(state_file_path):
-            backup_file = state_file_path + '.backup'
-            if os.path.exists(backup_file):
-                os.unlink(backup_file)
-            os.rename(state_file_path, backup_file)
-            os.rename(temp_file, state_file_path)
-            os.unlink(backup_file)
-        else:
-            os.rename(temp_file, state_file_path)
-        
-        logger = logging.getLogger(__name__)
-        logger.info(f"Updated job state", extra={
-            "mod_name": mod_name,
-            "status": status,
-            "is_complete": state['is_complete']
-        })
-        
-    except json.JSONDecodeError as e:
-        # Handle corrupted state file
-        logger = logging.getLogger(__name__)
-        backup_path = f"{state_file_path}.corrupted.{int(time.time())}"
-        try:
-            shutil.copy2(state_file_path, backup_path)
-            logger.error(f"Corrupted state file backed up to: {backup_path}")
-        except:
-            pass
-        raise RuntimeError(f"Corrupted state file {state_file_path}: {e}")
-    
-    except Exception as e:
-        # Clean up partial files
-        temp_file = state_file_path + '.tmp'
-        try:
-            if Path(temp_file).exists():
-                os.unlink(temp_file)
-        except:
-            pass
-        raise RuntimeError(f"Failed to update state file {state_file_path}: {e}")
-
-
-def _setup_mod_execution_environment(mod_name: str) -> Dict[str, Any]:
-    """
-    Setup execution environment for mod execution.
-    
-    Args:
-        mod_name: Name of mod being executed
-        
-    Returns:
-        Dictionary containing execution context info
-        
-    Raises:
-        RuntimeError: If environment setup fails
-    """
-    execution_context = _get_execution_context()
-    
-    # Create job files for logging and state
-    log_file_path, state_file_path = _find_or_create_job_files(execution_context, is_cli=False)
-    
-    # Initialize state if needed
-    if not Path(state_file_path).exists():
-        _initialize_job_state_sdk(state_file_path)
-    
-    # Add to expected mods list
-    _add_mod_to_expected_list(state_file_path, mod_name)
-    
-    # Setup logging
-    log_config = DEFAULT_LOG_CONFIG.copy()
-    log_config.update(_global_config)
-    setup_job_logging(log_file_path, log_config)
-    
-    return {
-        'log_file_path': log_file_path,
-        'state_file_path': state_file_path,
-        'execution_context': execution_context
-    }
+    timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+    return f"{mod_type}_{timestamp}"
 
 
 def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
@@ -386,12 +109,7 @@ def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str
         raise RuntimeError(f"Parameter resolution failed: {e}")
 
 
-def _execute_registry_mod(
-    mod_type: str, 
-    resolved_params: Dict[str, Any], 
-    mod_name: str, 
-    execution_context: Dict[str, Any]
-) -> Dict[str, Any]:
+def _execute_registry_mod(mod_type: str, resolved_params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
     """
     Execute mod via registry with full validation.
     
@@ -399,7 +117,6 @@ def _execute_registry_mod(
         mod_type: Type of mod to execute
         resolved_params: Resolved parameters
         mod_name: Name of mod instance
-        execution_context: Execution environment context
         
     Returns:
         ModResult dictionary
@@ -408,12 +125,7 @@ def _execute_registry_mod(
         RuntimeError: If mod execution fails
     """
     # Setup mod-specific logger
-    mod_logger = setup_logger(
-        f"registry.{mod_type}.execution", 
-        execution_context['log_file_path'], 
-        mod_type, 
-        mod_name
-    )
+    mod_logger = setup_logger(f"registry.{mod_type}.execution", mod_type, mod_name)
     
     # Registry lookup and execution
     registry = get_registry()
@@ -429,9 +141,6 @@ def _execute_registry_mod(
         result['logs']['mod_name'] = mod_name
         result['logs']['mod_type'] = mod_type
         
-        # Update job state
-        _update_job_state(execution_context['state_file_path'], mod_name, result['status'])
-        
         mod_logger.info(f"Registry mod execution completed", extra={
             "status": result['status'],
             "execution_time": result['execution_time'],
@@ -442,7 +151,6 @@ def _execute_registry_mod(
         
     except Exception as e:
         mod_logger.error(f"Registry mod execution failed: {e}", exc_info=True)
-        _update_job_state(execution_context['state_file_path'], mod_name, 'error')
         raise RuntimeError(f"Mod execution failed: {e}")
 
 
@@ -493,41 +201,33 @@ def _validate_mod_execution_inputs(mod_type: str, params: Dict[str, Any], mod_na
         raise ValueError("mod_name must be a non-empty string")
 
 
-def _update_job_state(state_file_path: str, mod_name: str, status: str) -> None:
+def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    Update job state (wrapper to handle errors gracefully).
+    Execute a DataPy mod via registry with simplified execution.
     
     Args:
-        state_file_path: Path to state file
-        mod_name: Name of mod
-        status: Status to update
-    """
-    try:
-        update_job_state(state_file_path, mod_name, status)
-    except Exception as e:
-        logger.error(f"Failed to update job state: {e}")
-        # Don't fail the whole execution for state update errors
-
-
-
-def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
-    """
-    Execute a DataPy mod via registry with optimized performance.
-    
-    Args:
-        mod_path: Mod type identifier (looked up in registry)
+        mod_type: Mod type identifier (looked up in registry)
         params: Parameters for the mod
-        mod_name: Unique name for this mod instance
+        mod_name: Unique name for this mod instance (auto-generated if None)
         
     Returns:
         ModResult dictionary with execution results
     """
     try:
         # Clean and validate inputs
-        mod_type = mod_path.strip()
-        mod_name = mod_name.strip()
+        mod_type = mod_type.strip()
+        
+        # Auto-generate mod_name if not provided
+        if mod_name is None:
+            mod_name = _auto_generate_mod_name(mod_type)
+        else:
+            mod_name = mod_name.strip()
         
         _validate_mod_execution_inputs(mod_type, params, mod_name)
+        
+        # Ensure console logging is setup
+        if not _global_config:
+            setup_console_logging(DEFAULT_LOG_CONFIG)
         
         # Check registry for mod existence
         registry = get_registry()
@@ -537,14 +237,11 @@ def run_mod(mod_path: str, params: Dict[str, Any], mod_name: str) -> Dict[str, A
             suggestion = f"python -m datapy register-mod <module_path>"
             return validation_error(mod_name, f"{e}. Register it with: {suggestion}")
         
-        # Setup execution environment
-        execution_context = _setup_mod_execution_environment(mod_name)
-        
         # Resolve parameters
         resolved_params = _resolve_mod_parameters(mod_type, params, mod_name)
         
         # Execute mod
-        result = _execute_registry_mod(mod_type, resolved_params, mod_name, execution_context)
+        result = _execute_registry_mod(mod_type, resolved_params, mod_name)
         
         return result
         

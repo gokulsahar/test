@@ -8,9 +8,6 @@ for both CLI and Python SDK usage patterns with mod name/type tracking.
 from typing import Dict, List, Optional, Any, Union
 import time
 import uuid
-import logging
-
-logger = logging.getLogger(__name__)
 
 # Exit code constants for consistent error handling
 SUCCESS = 0
@@ -76,7 +73,6 @@ class ModResult:
             "timestamp": time.time()
         }
         self.warnings.append(warning_entry)
-        logger.warning(f"[{self.mod_name}] {message} (code: {warning_code})")
     
     def add_error(self, message: str, error_code: int = RUNTIME_ERROR) -> None:
         """
@@ -98,7 +94,6 @@ class ModResult:
             "timestamp": time.time()
         }
         self.errors.append(error_entry)
-        logger.error(f"[{self.mod_name}] {message} (code: {error_code})")
     
     def add_metric(self, key: str, value: Any) -> None:
         """
@@ -222,10 +217,6 @@ class ModResult:
             }
         }
         
-        # Log the final result
-        logger.info(f"[{self.mod_name}] Execution completed with status: {status} "
-                   f"(time: {result['execution_time']}s, exit_code: {exit_code})")
-            
         return result
 
 

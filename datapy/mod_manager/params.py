@@ -125,20 +125,6 @@ class ProjectConfig:
         
         return globals_config.copy()
     
-    def get_logging_config(self) -> Dict[str, Any]:
-        """
-        Get project-level logging configuration.
-        
-        Returns:
-            Dictionary of logging settings
-        """
-        logging_config = self.config_data.get('logging', {})
-        if not isinstance(logging_config, dict):
-            logger.warning("logging in project config is not a dictionary, ignoring")
-            return {}
-        
-        return logging_config.copy()
-    
     @property
     def project_name(self) -> Optional[str]:
         """Get the project name from configuration."""
@@ -384,49 +370,3 @@ def create_resolver(search_path: Optional[str] = None) -> ParameterResolver:
         return ParameterResolver(project_config)
     except Exception as e:
         raise RuntimeError(f"Failed to create parameter resolver: {e}")
-
-
-# TODO: Future orchestrator placeholders
-def resolve_distributed_params(mod_name: str, distributed_context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Resolve parameters in distributed execution context (future orchestrator).
-    
-    TODO: Implement when orchestrator supports distributed execution.
-    Will handle:
-    - Cross-server parameter synchronization
-    - Distributed variable substitution
-    - Cluster-wide configuration management
-    
-    Args:
-        mod_name: Name of the mod
-        distributed_context: Distributed execution context
-        
-    Returns:
-        Resolved parameters for distributed execution
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Distributed parameter resolution not yet implemented - needed for Phase 2 orchestrator")
-
-
-def validate_parameter_dependencies(params: Dict[str, Any]) -> bool:
-    """
-    Validate parameter dependencies for orchestrator scheduling (future).
-    
-    TODO: Implement when orchestrator supports dependency analysis.
-    Will validate:
-    - Parameter dependency graphs
-    - Circular dependency detection across mods
-    - Resource requirement validation
-    
-    Args:
-        params: Parameter dictionary to validate
-        
-    Returns:
-        True if dependencies are valid
-        
-    Raises:
-        NotImplementedError: Feature not yet implemented
-    """
-    raise NotImplementedError("Parameter dependency validation not yet implemented - needed for Phase 2 orchestrator")

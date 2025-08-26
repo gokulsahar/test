@@ -1,63 +1,23 @@
 """
-Click-based CLI runner for DataPy framework with state-based logging.
+Click-based CLI runner for DataPy framework with console-only output.
 
 Provides command-line interface for executing mods and Python scripts with
-automatic state management and lifecycle handling.
+simple console logging - no file management.
 """
 
 import json
 import sys
 import subprocess
 import os
-import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 import click
 
-from .logger import (
-    setup_job_logging, setup_logger, is_job_complete_cli, 
-    archive_completed_state, initialize_job_state, DEFAULT_LOG_CONFIG
-)
+from .logger import setup_console_logging, setup_logger, DEFAULT_LOG_CONFIG
 from .params import load_job_config
 from .result import VALIDATION_ERROR, RUNTIME_ERROR, SUCCESS, SUCCESS_WITH_WARNINGS
 from .sdk import set_global_config, run_mod
-
-
-def _create_cli_job_files(yaml_name: str) -> tuple[str, str]:
-    """
-    Create job files for CLI execution.
-    
-    Args:
-        yaml_name: Base name from YAML file
-        
-    Returns:
-        Tuple of (log_file_path, state_file_path)
-        
-    Raises:
-        RuntimeError: If file creation fails
-    """
-    try:
-        log_base = Path("logs")
-        state_running = log_base / "state" / "running"
-        
-        # Ensure directories exist
-        state_running.mkdir(parents=True, exist_ok=True)
-        log_base.mkdir(exist_ok=True)
-        
-        # Create new execution files
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        execution_id = f"{yaml_name}_{timestamp}"
-        log_file_path = str(log_base / f"{execution_id}.log")
-        state_file_path = str(state_running / f"{execution_id}.state")
-        
-        # Create log file
-        Path(log_file_path).touch()
-        
-        return log_file_path, state_file_path
-        
-    except Exception as e:
-        raise RuntimeError(f"Failed to create CLI job files: {e}")
 
 
 def _parse_mod_config(config: Dict[str, Any], mod_name: str) -> tuple[str, Dict[str, Any]]:
@@ -111,10 +71,6 @@ def cli(ctx: click.Context, log_level: Optional[str], quiet: bool) -> None:
     ctx.obj['log_level'] = log_level
 
 
-# =============================================================================
-# UPDATED run-mod COMMAND - Now uses registry-based SDK (Phase 2.2)
-# =============================================================================
-
 @cli.command('run-mod')
 @click.argument('mod_name')
 @click.option('--params', '-p', required=True,
@@ -147,7 +103,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
             sys.exit(VALIDATION_ERROR)
         
-        # Load and validate YAML configuration (keep existing)
+        # Load and validate YAML configuration
         try:
             config = load_job_config(params)
             mod_type, mod_params = _parse_mod_config(config, mod_name)
@@ -155,9 +111,6 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
         except Exception as e:
             click.echo(f"Error parsing YAML file {params}: {e}", err=True)
             sys.exit(VALIDATION_ERROR)
-        
-        # Extract yaml_name for file naming
-        yaml_name = Path(params).stem
         
         # Setup global config for SDK
         try:
@@ -177,7 +130,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
             click.echo(f"Using parameters from: {params}")
         
-        # Execute the mod using updated SDK (registry-based)
+        # Execute the mod using registry-based SDK
         try:
             result = run_mod(mod_type, mod_params, mod_name)
             
@@ -219,7 +172,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
         else:
             click.echo(json.dumps(cli_result, indent=2))
         
-        # Handle exit code (keep existing logic)
+        # Handle exit code
         exit_code = result.get('exit_code', RUNTIME_ERROR)
         if result['status'] == 'error' and exit_on_error:
             if not quiet:
@@ -268,20 +221,6 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
             click.echo(f"Error: Script path is not a file: {script_path}", err=True)
             sys.exit(VALIDATION_ERROR)
         
-        # Setup execution context
-        script_name = script_file.stem
-        
-        try:
-            log_file_path, state_file_path = _create_cli_job_files(f"script_{script_name}")
-            
-            # Initialize SDK-style state for scripts
-            from .logger import initialize_job_state
-            initialize_job_state(state_file_path, str(script_path), [])
-            
-        except Exception as e:
-            click.echo(f"Error setting up execution environment: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
-        
         # Load parameters and setup globals if provided
         globals_config = {}
         if params:
@@ -296,10 +235,12 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         if log_level:
             globals_config['log_level'] = log_level
         
-        # Setup logging
+        # Setup console logging
         try:
-            setup_job_logging(log_file_path, globals_config)
-            logger = setup_logger(__name__, log_file_path)
+            log_config = DEFAULT_LOG_CONFIG.copy()
+            log_config.update(globals_config)
+            setup_console_logging(log_config)
+            logger = setup_logger(__name__)
             
         except Exception as e:
             click.echo(f"Error setting up logging: {e}", err=True)
@@ -310,12 +251,10 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
             click.echo(f"Executing script: {script_path}")
             if params:
                 click.echo(f"Using parameters from: {params}")
-            click.echo(f"Log file: {log_file_path}")
         
         logger.info(f"CLI executing script {script_path}", extra={
             "script_path": script_path,
-            "params_file": params,
-            "state_file": state_file_path
+            "params_file": params
         })
         
         # Prepare environment for the script
@@ -324,10 +263,6 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         # Add DataPy config as environment variables
         if globals_config:
             env['DATAPY_CONFIG'] = json.dumps(globals_config)
-        
-        # Add log file path for script's potential framework usage
-        env['DATAPY_LOG_FILE'] = log_file_path
-        env['DATAPY_STATE_FILE'] = state_file_path
         
         # Execute the Python script
         try:
@@ -438,20 +373,8 @@ def list_mods_command(ctx: click.Context, category: Optional[str]) -> None:
         sys.exit(RUNTIME_ERROR)
 
 
-def main() -> None:
-    """Main entry point for CLI."""
-    try:
-        cli()
-    except KeyboardInterrupt:
-        click.echo("\nInterrupted by user", err=True)
-        sys.exit(130)  # Standard exit code for SIGINT
-    except Exception as e:
-        click.echo(f"Unexpected error: {e}", err=True)
-        sys.exit(RUNTIME_ERROR)
-        
-        
 # =============================================================================
-# REGISTRY MANAGEMENT COMMANDS - Added for Phase 1 Registry System
+# REGISTRY MANAGEMENT COMMANDS
 # =============================================================================
 
 from .registry import get_registry
@@ -617,7 +540,6 @@ def mod_info_command(ctx: click.Context, mod_type: str) -> None:
         if quiet:
             click.echo(json.dumps(mod_info, indent=2))
         else:
-            # Use direct fields from registry structure (not nested metadata)
             click.echo(f"Mod Information: {mod_type}")
             click.echo("=" * (17 + len(mod_type)))
             click.echo(f"Module Path: {mod_info.get('module_path', 'unknown')}")
@@ -656,8 +578,18 @@ def mod_info_command(ctx: click.Context, mod_type: str) -> None:
             click.echo(f"Error getting mod info: {e}", err=True)
         sys.exit(RUNTIME_ERROR)
 
+
+def main() -> None:
+    """Main entry point for CLI."""
+    try:
+        cli()
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted by user", err=True)
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        click.echo(f"Unexpected error: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+
+
 if __name__ == '__main__':
     main()
-    
-    
-    
