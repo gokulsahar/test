@@ -161,68 +161,6 @@ class ModRegistry:
         
         return self.registry_data['mods'][mod_type].copy()
     
-    def execute_mod(self, mod_type: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
-        """
-        Execute a mod via registry lookup.
-        
-        Args:
-            mod_type: Type of mod to execute
-            params: Parameters for the mod
-            mod_name: Unique name for this mod instance
-            
-        Returns:
-            ModResult dictionary
-            
-        Raises:
-            ValueError: If mod not found or parameters invalid
-            RuntimeError: If mod execution fails
-        """
-        # Validate inputs
-        if not mod_type or not isinstance(mod_type, str):
-            return validation_error(mod_name or "unknown", "mod_type must be a non-empty string")
-        
-        if not isinstance(params, dict):
-            return validation_error(mod_name or "unknown", "params must be a dictionary")
-        
-        if not mod_name or not isinstance(mod_name, str):
-            return validation_error("unknown", "mod_name must be a non-empty string")
-        
-        # Get mod info from registry
-        try:
-            mod_info = self.get_mod_info(mod_type)
-        except ValueError as e:
-            return validation_error(mod_name, str(e))
-        
-        # Import and execute mod
-        try:
-            module_path = mod_info['module_path']
-            mod_module = importlib.import_module(module_path)
-            
-            if not hasattr(mod_module, 'run'):
-                return validation_error(mod_name, f"Mod {module_path} missing required 'run' function")
-            
-            run_func = mod_module.run
-            if not callable(run_func):
-                return validation_error(mod_name, f"Mod {module_path} 'run' must be callable")
-            
-            # Add mod metadata to params for mod use
-            params_with_meta = params.copy()
-            params_with_meta['_mod_name'] = mod_name
-            params_with_meta['_mod_type'] = mod_type
-            
-            # Execute mod
-            result = run_func(params_with_meta)
-            
-            if not isinstance(result, dict):
-                return runtime_error(mod_name, f"Mod must return a dictionary, got {type(result)}")
-            
-            return result
-            
-        except ImportError as e:
-            return validation_error(mod_name, f"Cannot import mod {module_path}: {e}")
-        except Exception as e:
-            return runtime_error(mod_name, f"Mod execution failed: {e}")
-    
     def delete_mod(self, mod_type: str) -> bool:
         """
         Delete a mod from the registry.
@@ -373,53 +311,7 @@ class ModRegistry:
         
         logger.info(f"Registered mod: {mod_type} ({module_path})")
         return True
-    
-    def _guess_category(self, module_path: str) -> str:
-        """Guess mod category from module path (deprecated - use metadata.category)."""
-        if '.sources.' in module_path:
-            return 'sources'
-        elif '.transformers.' in module_path:
-            return 'transformers'
-        elif '.sinks.' in module_path:
-            return 'sinks'
-        elif '.solos.' in module_path:
-            return 'solos'
-        else:
-            return 'unknown'
-    
-    def validate_params_schema(self, mod_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate parameters against mod's config schema.
         
-        Args:
-            mod_type: Type of mod to validate against
-            params: Parameters to validate
-            
-        Returns:
-            Validated parameters with defaults applied
-            
-        Raises:
-            ValueError: If validation fails
-        """
-        mod_info = self.get_mod_info(mod_type)
-        config_schema = mod_info.get('config_schema', {})
-        
-        validated_params = params.copy()
-        
-        # Check required parameters
-        required_params = config_schema.get('required', {})
-        for param_name, param_def in required_params.items():
-            if param_name not in validated_params:
-                raise ValueError(f"Missing required parameter: {param_name}")
-        
-        # Apply defaults for optional parameters
-        optional_params = config_schema.get('optional', {})
-        for param_name, param_def in optional_params.items():
-            if param_name not in validated_params and 'default' in param_def:
-                validated_params[param_name] = param_def['default']
-        
-        return validated_params
-    
     def validate_registry(self) -> List[str]:
         """
         Validate all mods in registry can be imported and have proper structure.

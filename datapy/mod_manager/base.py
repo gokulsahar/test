@@ -128,22 +128,3 @@ class ConfigSchema(BaseModel):
         
         return v
 
-
-class BaseModParams(BaseModel):
-    """
-    Base parameter class that all mod parameter classes must inherit from.
-    
-    Enforces required metadata and provides consistent parameter validation
-    across all mods in the framework.
-    
-    Example:
-        class Params(BaseModParams):
-            metadata: ModMetadata = METADATA
-            config_schema: ConfigSchema = CONFIG_SCHEMA
-            input_path: str
-            delimiter: str = ","
-    """
-    metadata: ModMetadata = Field(..., description="Required mod metadata")
-    config_schema: ConfigSchema = Field(..., description="Required configuration schema")
-    
-    model_config = {"extra": "forbid"}  # Prevent typos in parameter names

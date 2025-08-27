@@ -239,23 +239,3 @@ def runtime_error(mod_name: str, message: str) -> Dict[str, Any]:
     result = ModResult("unknown", mod_name)
     result.add_error(message, RUNTIME_ERROR)
     return result.error(RUNTIME_ERROR)
-
-
-def timeout_error(mod_name: str, message: str) -> Dict[str, Any]:
-    """Create a timeout error result (reserved for future orchestrator)."""
-    if not mod_name or not message:
-        raise ValueError("mod_name and message cannot be empty")
-    
-    result = ModResult("unknown", mod_name)
-    result.add_error(message, TIMEOUT)
-    return result.error(TIMEOUT)
-
-
-def canceled_error(mod_name: str, message: str) -> Dict[str, Any]:
-    """Create a canceled error result (reserved for future orchestrator)."""
-    if not mod_name or not message:
-        raise ValueError("mod_name and message cannot be empty")
-    
-    result = ModResult("unknown", mod_name)
-    result.add_error(message, CANCELED)
-    return result.error(CANCELED)
