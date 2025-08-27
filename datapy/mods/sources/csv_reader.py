@@ -1,8 +1,5 @@
 """
 CSV Reader - Source mod for reading CSV files with validation.
-
-Realistic example of a DataPy source mod that reads CSV files,
-performs basic validation, and outputs clean data artifacts.
 """
 
 from datapy.mod_manager.result import ModResult
@@ -58,12 +55,6 @@ CONFIG_SCHEMA = ConfigSchema(
 def run(params):
     """
     Read CSV file with validation and format conversion.
-    
-    Args:
-        params: Dictionary with validated parameters from registry schema
-        
-    Returns:
-        ModResult dictionary with data artifacts
     """
     import pandas as pd
     import os
@@ -74,7 +65,7 @@ def run(params):
     result = ModResult("csv_reader", mod_name)
     
     try:
-        # Get parameters with defaults (registry handles validation)
+        # Get parameters with defaults
         file_path = params["file_path"]
         encoding = params.get("encoding", "utf-8")
         delimiter = params.get("delimiter", ",")
@@ -83,8 +74,8 @@ def run(params):
         
         # Validate file exists
         if not os.path.exists(file_path):
-            result.add_error(f"File not found: {file_path}")
-            return result.error(20)  # VALIDATION_ERROR
+            result.add_error("File not found: " + str(file_path))
+            return result.error(20)
         
         # Read CSV file with parameters
         df = pd.read_csv(
@@ -102,12 +93,12 @@ def run(params):
         # Check for missing data
         missing_count = df.isnull().sum().sum()
         if missing_count > 0:
-            result.add_warning(f"Found {missing_count} missing values")
+            result.add_warning("Found " + str(missing_count) + " missing values")
         
         # Check for duplicate rows
         duplicate_count = df.duplicated().sum()
         if duplicate_count > 0:
-            result.add_warning(f"Found {duplicate_count} duplicate rows")
+            result.add_warning("Found " + str(duplicate_count) + " duplicate rows")
         
         # Add comprehensive metrics
         result.add_metric("rows_read", len(df))
@@ -140,17 +131,8 @@ def run(params):
             return result.success()
         
     except FileNotFoundError as e:
-        result.add_error(f"File not found: {e}")
-        return result.error(20)  # VALIDATION_ERROR
-    except pd.errors.EmptyDataError:
-        result.add_error("CSV file is empty or invalid")
-        return result.error(20)  # VALIDATION_ERROR
-    except pd.errors.ParserError as e:
-        result.add_error(f"CSV parsing error: {e}. Check delimiter or file format.")
-        return result.error(20)  # VALIDATION_ERROR
-    except UnicodeDecodeError as e:
-        result.add_error(f"Encoding error: {e}. Try a different encoding.")
-        return result.error(20)  # VALIDATION_ERROR
+        result.add_error("File not found: " + str(e))
+        return result.error(20)
     except Exception as e:
-        result.add_error(f"CSV reading failed: {e}")
-        return result.error(30)  # RUNTIME_ERROR
+        result.add_error("CSV reading failed: " + str(e))
+        return result.error(30)

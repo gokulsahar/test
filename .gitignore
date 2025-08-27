@@ -111,7 +111,6 @@ projects/*/output/
 projects/*/logs/
 
 # Development test files
-test_*.py
 demo_*.py
 pipeline_*.py
 

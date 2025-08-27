@@ -71,7 +71,8 @@ def _auto_generate_mod_name(mod_type: str) -> str:
     Returns:
         Auto-generated mod name
     """
-    timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     return f"{mod_type}_{timestamp}"
 
 

@@ -1,14 +1,14 @@
 globals:
-  log_level: "INFO"
+  log_level: "DEBUG"
   base_path: "test_data"
   encoding: "utf-8"
 
 mods:
-  read_customers_basic:
+  extract_customers_basic:
     _type: csv_reader
     file_path: "test_data/customers.csv"
   
-  read_customers_advanced:
+  extract_customers_advanced:
     _type: csv_reader
     file_path: "test_data/customers.csv"
     encoding: "utf-8"
