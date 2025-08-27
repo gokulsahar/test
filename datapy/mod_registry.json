@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2025-08-27T21:28:13.645638"
+    "last_updated": "2025-08-27T22:39:17.011215"
   },
   "mods": {
     "csv_reader": {
@@ -60,7 +60,7 @@
           }
         }
       },
-      "registered_at": "2025-08-27T21:28:13.645625"
+      "registered_at": "2025-08-27T22:39:17.011177"
     }
   }
 }
