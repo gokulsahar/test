@@ -13,10 +13,11 @@ from typing import Dict, Any, Optional
 
 import click
 
-from .logger import setup_console_logging, setup_logger, DEFAULT_LOG_CONFIG
+from .context import set_context  
+from .logger import set_log_level, setup_logger, setup_console_logging, DEFAULT_LOG_CONFIG
 from .params import load_job_config
 from .result import VALIDATION_ERROR, RUNTIME_ERROR, SUCCESS, SUCCESS_WITH_WARNINGS
-from .sdk import set_global_config, run_mod
+from .sdk import  run_mod
 
 
 def _parse_mod_config(config: Dict[str, Any], mod_name: str) -> tuple[str, Dict[str, Any]]:
@@ -62,10 +63,13 @@ def _parse_mod_config(config: Dict[str, Any], mod_name: str) -> tuple[str, Dict[
 @click.option('--params', '-p', required=True,
               type=click.Path(exists=True, readable=True),
               help='YAML parameter file path')
+@click.option('--context', '-c',
+              type=click.Path(exists=True, readable=True),
+              help='Context JSON file path for variable substitution')
 @click.option('--exit-on-error', is_flag=True, default=True,
               help='Exit with error code on mod failure (default: True)')
 @click.pass_context
-def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_error: bool) -> None:
+def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Optional[str], exit_on_error: bool) -> None:
     """
     Execute a DataPy mod with registry-based execution.
     
@@ -73,7 +77,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
     
     Examples:
         datapy run-mod extract_customers --params daily_job.yaml
-        datapy run-mod clean_data --params daily_job.yaml
+        datapy run-mod extract_customers --params daily_job.yaml --context prod_context.json
     """
     log_level = ctx.obj.get('log_level')
     
@@ -88,6 +92,26 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
             click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
             sys.exit(VALIDATION_ERROR)
         
+        # Setup logging from CLI flag only (no YAML globals)
+        try:
+            if log_level:
+                set_log_level(log_level)
+            else:
+                # Setup default console logging
+                setup_console_logging(DEFAULT_LOG_CONFIG)
+        except Exception as e:
+            click.echo(f"Error setting up logging: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
+        
+        # Setup context if provided
+        if context:
+            try:
+                set_context(context)
+                click.echo(f"Using context file: {context}")
+            except Exception as e:
+                click.echo(f"Error setting context file {context}: {e}", err=True)
+                sys.exit(VALIDATION_ERROR)
+        
         # Load and validate YAML configuration
         try:
             config = load_job_config(params)
@@ -96,19 +120,6 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, exit_on_erro
         except Exception as e:
             click.echo(f"Error parsing YAML file {params}: {e}", err=True)
             sys.exit(VALIDATION_ERROR)
-        
-        # Setup global config for SDK
-        try:
-            globals_config = config.get('globals', {})
-            if log_level:
-                globals_config['log_level'] = log_level
-            
-            # Set global config for SDK execution
-            set_global_config(globals_config)
-            
-        except Exception as e:
-            click.echo(f"Error setting up global config: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
         
         # Output execution info
         click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
@@ -200,30 +211,29 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
             click.echo(f"Error: Script path is not a file: {script_path}", err=True)
             sys.exit(VALIDATION_ERROR)
         
-        # Load parameters and setup globals if provided
-        globals_config = {}
+        # Setup logging from CLI flag only (no YAML globals)
+        try:
+            if log_level:
+                set_log_level(log_level)
+            else:
+                # Setup default console logging
+                setup_console_logging(DEFAULT_LOG_CONFIG)
+        except Exception as e:
+            click.echo(f"Error setting up logging: {e}", err=True)
+            sys.exit(RUNTIME_ERROR)
+        
+        # Load parameters if provided (but don't extract globals)
+        script_env = {}
         if params:
             try:
                 config = load_job_config(params)
-                globals_config = config.get('globals', {})
+                # Pass entire config as environment variable for script to use
+                script_env['DATAPY_CONFIG'] = json.dumps(config)
             except Exception as e:
                 click.echo(f"Error loading parameters from {params}: {e}", err=True)
                 sys.exit(VALIDATION_ERROR)
         
-        # Override log level if specified
-        if log_level:
-            globals_config['log_level'] = log_level
-        
-        # Setup console logging
-        try:
-            log_config = DEFAULT_LOG_CONFIG.copy()
-            log_config.update(globals_config)
-            setup_console_logging(log_config)
-            logger = setup_logger(__name__)
-            
-        except Exception as e:
-            click.echo(f"Error setting up logging: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
+        logger = setup_logger(__name__)
         
         # Output execution info
         click.echo(f"Executing script: {script_path}")
@@ -237,10 +247,7 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         
         # Prepare environment for the script
         env = os.environ.copy()
-        
-        # Add DataPy config as environment variables
-        if globals_config:
-            env['DATAPY_CONFIG'] = json.dumps(globals_config)
+        env.update(script_env)
         
         # Execute the Python script
         try:

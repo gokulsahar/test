@@ -6,7 +6,6 @@ with automatic project configuration discovery and variable substitution.
 """
 
 import os
-import re
 from pathlib import Path
 from typing import Dict, Any, Optional, Set
 import yaml
@@ -152,31 +151,28 @@ class ParameterResolver:
             project_config: Project configuration instance
         """
         self.project_config = project_config or ProjectConfig()
-        self._substitution_pattern = re.compile(r'\$\{([^}]+)\}')
         # Note: Removed thread safety - ETL processes are single-threaded per execution
         # TODO: Add distributed parameter resolution for future orchestrator
     
     def resolve_mod_params(
-        self,
-        mod_name: str,
-        job_params: Dict[str, Any],
-        mod_defaults: Optional[Dict[str, Any]] = None,
-        globals_override: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    self,
+    mod_name: str,
+    job_params: Dict[str, Any]
+) -> Dict[str, Any]:
         """
         Resolve parameters for a mod using the inheritance chain.
+        
+        Registry mod defaults are applied later during parameter validation.
         
         Args:
             mod_name: Name of the mod
             job_params: Parameters from job configuration
-            mod_defaults: Mod's built-in defaults
-            globals_override: Global parameter overrides
             
         Returns:
-            Fully resolved parameter dictionary
+            Resolved parameter dictionary
             
         Raises:
-            ValueError: If mod_name is empty or variable substitution fails
+            ValueError: If mod_name is empty or parameter resolution fails
         """
         if not mod_name or not isinstance(mod_name, str):
             raise ValueError("mod_name must be a non-empty string")
@@ -184,10 +180,8 @@ class ParameterResolver:
         if not isinstance(job_params, dict):
             raise ValueError("job_params must be a dictionary")
         
-        # Start with mod's built-in defaults
+        # Start with empty resolved params
         resolved = {}
-        if mod_defaults and isinstance(mod_defaults, dict):
-            resolved.update(mod_defaults)
         
         # Apply project-level mod defaults
         try:
@@ -199,115 +193,8 @@ class ParameterResolver:
         # Apply job-specific parameters (highest priority)
         resolved.update(job_params)
         
-        # Build globals context for substitution
-        globals_context = {}
-        try:
-            globals_context.update(self.project_config.get_globals())
-        except Exception as e:
-            logger.warning(f"Failed to get project globals: {e}")
-        
-        if globals_override and isinstance(globals_override, dict):
-            globals_context.update(globals_override)
-        
-        # Perform variable substitution with circular dependency detection
-        try:
-            resolved = self._substitute_variables(resolved, globals_context)
-        except Exception as e:
-            raise ValueError(f"Variable substitution failed for mod {mod_name}: {e}")
-        
         logger.debug(f"Resolved params for {mod_name}: {resolved}")
         return resolved
-    
-    def _substitute_variables(
-        self, 
-        params: Dict[str, Any], 
-        globals_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Perform variable substitution on parameter values with circular dependency detection.
-        
-        Args:
-            params: Parameter dictionary to process
-            globals_context: Global variables for substitution
-            
-        Returns:
-            Dictionary with variables substituted
-            
-        Raises:
-            ValueError: If circular dependency detected or substitution fails
-        """
-        # Track substitution depth to detect circular dependencies
-        substitution_stack: Set[str] = set()
-        max_depth = 10  # Prevent infinite recursion
-        
-        def substitute_value(value: Any, depth: int = 0) -> Any:
-            if depth > max_depth:
-                raise ValueError(f"Maximum substitution depth ({max_depth}) exceeded - possible circular dependency")
-            
-            if isinstance(value, str):
-                return self._substitute_string(value, globals_context, substitution_stack, depth)
-            elif isinstance(value, dict):
-                return {k: substitute_value(v, depth + 1) for k, v in value.items()}
-            elif isinstance(value, list):
-                return [substitute_value(item, depth + 1) for item in value]
-            else:
-                return value
-        
-        return {k: substitute_value(v) for k, v in params.items()}
-    
-    def _substitute_string(
-        self, 
-        text: str, 
-        context: Dict[str, Any], 
-        substitution_stack: Set[str], 
-        depth: int
-    ) -> str:
-        """
-        Substitute variables in a string using ${key.subkey} syntax.
-        
-        Args:
-            text: String to process
-            context: Variable context for substitution
-            substitution_stack: Set of variables currently being substituted
-            depth: Current substitution depth
-            
-        Returns:
-            String with variables substituted
-            
-        Raises:
-            ValueError: If variable substitution fails or circular dependency detected
-        """
-        def replace_var(match):
-            var_path = match.group(1)
-            
-            # Check for circular dependency
-            if var_path in substitution_stack:
-                raise ValueError(f"Circular dependency detected: {var_path}")
-            
-            try:
-                # Navigate nested dictionary using dot notation
-                value = context
-                for key in var_path.split('.'):
-                    if not isinstance(value, dict):
-                        raise KeyError(f"Cannot access key '{key}' on non-dict value")
-                    value = value[key]
-                
-                result = str(value)
-                
-                # Recursively substitute if the result contains more variables
-                if self._substitution_pattern.search(result):
-                    substitution_stack.add(var_path)
-                    try:
-                        result = self._substitute_string(result, context, substitution_stack, depth + 1)
-                    finally:
-                        substitution_stack.discard(var_path)
-                
-                return result
-                
-            except (KeyError, TypeError) as e:
-                raise ValueError(f"Variable substitution failed for ${{{var_path}}}: {e}")
-        
-        return self._substitution_pattern.sub(replace_var, text)
 
 
 def load_job_config(config_path: str) -> Dict[str, Any]:

@@ -146,6 +146,28 @@ def setup_logger(
         
     except Exception as e:
         raise RuntimeError(f"Failed to setup logger {name}: {e}")
+    
+
+def set_log_level(level: str) -> None:
+    """
+    Set logging level globally for the framework.
+    
+    Args:
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        
+    Raises:
+        ValueError: If level is invalid
+    """
+    if not level or not isinstance(level, str):
+        raise ValueError("level must be a non-empty string")
+    
+    level = level.upper()
+    if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        raise ValueError(f"Invalid log level: {level}")
+    
+    log_config = DEFAULT_LOG_CONFIG.copy()
+    log_config['log_level'] = level
+    setup_console_logging(log_config)
 
 
 def reset_logging() -> None:

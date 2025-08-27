@@ -8,59 +8,44 @@ orchestration. No file management - simple console output for shell script captu
 import importlib
 from typing import Dict, Any, Optional
 
-from .logger import setup_console_logging, setup_logger, DEFAULT_LOG_CONFIG
+from .context import set_context as _set_context, clear_context as _clear_context, substitute_context_variables
+from .logger import setup_logger, set_log_level as _set_log_level, DEFAULT_LOG_CONFIG
 from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
 from .registry import get_registry
 from .parameter_validation import validate_mod_parameters
 
-# Global configuration storage
-_global_config: Dict[str, Any] = {}
-
 logger = setup_logger(__name__)
 
-
-def set_global_config(config: Dict[str, Any]) -> None:
+def set_context(file_path: str) -> None:
     """
-    Set global configuration for SDK execution.
+    Set context file path for variable substitution.
     
     Args:
-        config: Configuration dictionary to merge with global config
+        file_path: Path to context JSON file
         
     Raises:
-        ValueError: If config is not a dictionary
+        ValueError: If file_path is empty
     """
-    global _global_config
-    
-    if not isinstance(config, dict):
-        raise ValueError("config must be a dictionary")
-    
-    _global_config.update(config)
-    
-    # Setup console logging with new config
-    log_config = DEFAULT_LOG_CONFIG.copy()
-    log_config.update(_global_config)
-    setup_console_logging(log_config)
-    
-    logger.debug(f"Updated global config", extra={"config_keys": list(config.keys())})
+    _set_context(file_path)
 
 
-def get_global_config() -> Dict[str, Any]:
+def clear_context() -> None:
+    """Clear context file path and cached data."""
+    _clear_context()
+
+
+def set_log_level(level: str) -> None:
     """
-    Get copy of current global configuration.
+    Set logging level for the framework.
     
-    Returns:
-        Copy of global configuration dictionary
+    Args:
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        
+    Raises:
+        ValueError: If level is invalid
     """
-    return _global_config.copy()
-
-
-def clear_global_config() -> None:
-    """Clear global configuration (useful for testing)."""
-    global _global_config
-    _global_config.clear()
-    logger.debug("Cleared global config")
-
+    _set_log_level(level)
 
 def _auto_generate_mod_name(mod_type: str) -> str:
     """
@@ -79,7 +64,9 @@ def _auto_generate_mod_name(mod_type: str) -> str:
 
 def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
     """
-    Resolve parameters using the inheritance chain.
+    Resolve parameters using project defaults and job parameters.
+    
+    Registry mod defaults are applied later during validation step.
     
     Args:
         mod_type: Type of mod being executed
@@ -95,21 +82,17 @@ def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str
     try:
         resolver = create_resolver()
         
-        # Registry mods don't have built-in defaults
-        mod_defaults = {}
-        
+        # Project defaults + job params (registry defaults applied during validation)
         resolved_params = resolver.resolve_mod_params(
             mod_name=mod_type,
-            job_params=params,
-            mod_defaults=mod_defaults,
-            globals_override=_global_config
+            job_params=params
         )
         
         return resolved_params
         
     except Exception as e:
         raise RuntimeError(f"Parameter resolution failed: {e}")
-
+    
 
 def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
     """
@@ -234,9 +217,8 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
         
         _validate_mod_execution_inputs(mod_type, params, mod_name)
         
-        # Ensure console logging is setup
-        if not _global_config:
-            setup_console_logging(DEFAULT_LOG_CONFIG)
+        # Start execution logging
+        logger.info(f"Starting mod execution: {mod_name} ({mod_type})")
         
         # 1. Get mod info from registry (just lookup)
         registry = get_registry()
@@ -247,21 +229,28 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
             suggestion = f"python -m datapy register-mod <module_path>"
             return validation_error(mod_name, f"{e}. Register it with: {suggestion}")
         
-        # 2. Resolve parameters (project defaults, globals, etc.)
+        # 2. Resolve parameters (project defaults + job params only)
         try:
             resolved_params = _resolve_mod_parameters(mod_type, params, mod_name)
             logger.debug(f"Parameters resolved", extra={"param_count": len(resolved_params)})
         except RuntimeError as e:
             return validation_error(mod_name, str(e))
         
-        # 3. Validate parameters using JSON Schema (common for CLI and SDK)
+        # 3. Context variable substitution (NEW - replaces global config substitution)
         try:
-            validated_params = validate_mod_parameters(mod_info, resolved_params)
+            substituted_params = substitute_context_variables(resolved_params)
+            logger.debug(f"Context substitution completed")
+        except (ValueError, RuntimeError) as e:
+            return validation_error(mod_name, f"Context substitution failed: {e}")
+        
+        # 4. Validate parameters using JSON Schema
+        try:
+            validated_params = validate_mod_parameters(mod_info, substituted_params)
             logger.info(f"Parameters validated successfully")
         except ValueError as e:
             return validation_error(mod_name, str(e))
         
-        # 4. Execute mod function (moved from registry to SDK)
+        # 5. Execute mod function
         result = _execute_mod_function(mod_info, validated_params, mod_name)
         
         return result
