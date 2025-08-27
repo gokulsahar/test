@@ -1,8 +1,0 @@
-globals:
-  log_level: "INFO"
-  base_path: "test_data"
-
-mods:
-  extract_customers:
-    _type: csv_reader
-    file_path: "test_data/customers.csv"

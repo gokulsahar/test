@@ -6,7 +6,7 @@ consistent metadata tracking and parameter validation across the framework.
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import re
 
 
