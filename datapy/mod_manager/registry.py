@@ -223,6 +223,43 @@ class ModRegistry:
         except Exception as e:
             return runtime_error(mod_name, f"Mod execution failed: {e}")
     
+    def delete_mod(self, mod_type: str) -> bool:
+        """
+        Delete a mod from the registry.
+        
+        Args:
+            mod_type: Type of mod to delete
+            
+        Returns:
+            True if deletion successful
+            
+        Raises:
+            ValueError: If mod_type not found in registry
+            RuntimeError: If deletion fails
+        """
+        if not mod_type or not isinstance(mod_type, str):
+            raise ValueError("mod_type must be a non-empty string")
+        
+        mod_type = mod_type.strip()
+        
+        # Check if mod exists
+        if mod_type not in self.registry_data['mods']:
+            available_mods = list(self.registry_data['mods'].keys())
+            raise ValueError(f"Mod '{mod_type}' not found in registry. Available mods: {available_mods}")
+        
+        try:
+            # Remove mod from registry
+            del self.registry_data['mods'][mod_type]
+            
+            # Save updated registry
+            self._save_registry()
+            
+            logger.info(f"Deleted mod from registry: {mod_type}")
+            return True
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to delete mod {mod_type}: {e}")
+    
     def list_available_mods(self, category: Optional[str] = None) -> List[str]:
         """
         List available mods in registry.
