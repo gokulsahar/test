@@ -1,0 +1,34 @@
+# CLI job configuration for DataPy demo
+# Note: Each mod needs to be run separately via CLI since
+# CLI doesn't support automatic mod chaining
+
+mods:
+  read_customers:
+    _type: csv_reader
+    file_path: "${env.data_path}/customers.csv"
+    encoding: "utf-8"
+    delimiter: ","
+    header: 0
+
+  filter_young_customers:
+    _type: csv_filter
+    # Note: For CLI, you would need to save intermediate results
+    # and load them in subsequent steps. The Python SDK handles
+    # this automatically through mod chaining.
+    filter_conditions:
+      age:
+        gte: "${processing.age_threshold}"
+      city:
+        in: "${processing.cities_filter}"
+    keep_columns: ["name", "age", "city", "email"]
+    drop_duplicates: true
+    sort_by: "age"
+
+  write_filtered_data:
+    _type: csv_writer
+    # Note: For CLI, you would need to pass the filtered data
+    # from the previous step manually
+    output_path: "${env.output_path}/filtered_customers.csv"
+    encoding: "utf-8"
+    include_header: true
+    create_directories: true

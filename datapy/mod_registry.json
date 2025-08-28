@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2025-08-28T12:50:33.027671"
+    "last_updated": "2025-08-28T13:25:34.074922"
   },
   "mods": {
     "csv_reader": {
@@ -61,6 +61,123 @@
         }
       },
       "registered_at": "2025-08-28T12:50:33.027666"
+    },
+    "csv_filter": {
+      "module_path": "datapy.mods.transformers.csv_filter",
+      "type": "csv_filter",
+      "version": "1.0.0",
+      "description": "Filters CSV data based on column conditions and criteria",
+      "category": "transformer",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [
+        "filtered_data"
+      ],
+      "globals": [
+        "filtered_rows",
+        "original_rows",
+        "filter_rate"
+      ],
+      "packages": [
+        "pandas>=1.5.0"
+      ],
+      "python_version": ">=3.8",
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Input DataFrame to filter"
+          },
+          "filter_conditions": {
+            "type": "dict",
+            "description": "Dictionary of column filters {column: {operator: value}}"
+          }
+        },
+        "optional": {
+          "keep_columns": {
+            "type": "list",
+            "default": null,
+            "description": "List of columns to keep (None = keep all)"
+          },
+          "drop_duplicates": {
+            "type": "bool",
+            "default": false,
+            "description": "Remove duplicate rows after filtering"
+          },
+          "sort_by": {
+            "type": "str",
+            "default": null,
+            "description": "Column name to sort results by"
+          }
+        }
+      },
+      "registered_at": "2025-08-28T13:25:15.563858"
+    },
+    "csv_writer": {
+      "module_path": "datapy.mods.sinks.csv_writer",
+      "type": "csv_writer",
+      "version": "1.0.0",
+      "description": "Writes pandas DataFrame to CSV files with configurable options",
+      "category": "sink",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [],
+      "globals": [
+        "output_path",
+        "rows_written",
+        "file_size"
+      ],
+      "packages": [
+        "pandas>=1.5.0"
+      ],
+      "python_version": ">=3.8",
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Input DataFrame to write to CSV"
+          },
+          "output_path": {
+            "type": "str",
+            "description": "Path where CSV file will be written"
+          }
+        },
+        "optional": {
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding for output CSV"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "CSV delimiter character"
+          },
+          "include_index": {
+            "type": "bool",
+            "default": false,
+            "description": "Include DataFrame index in output"
+          },
+          "include_header": {
+            "type": "bool",
+            "default": true,
+            "description": "Include column headers in output"
+          },
+          "create_directories": {
+            "type": "bool",
+            "default": true,
+            "description": "Create parent directories if they don't exist"
+          },
+          "backup_existing": {
+            "type": "bool",
+            "default": false,
+            "description": "Create backup of existing file before overwriting"
+          }
+        }
+      },
+      "registered_at": "2025-08-28T13:25:34.074916"
     }
   }
 }

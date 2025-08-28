@@ -1,0 +1,23 @@
+{
+  "env": {
+    "name": "development",
+    "data_path": "projects/demo_project/data",
+    "output_path": "projects/demo_project/output"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "ssl_enabled": false
+  },
+  "processing": {
+    "batch_size": 1000,
+    "enable_validation": true,
+    "age_threshold": 25,
+    "cities_filter": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix"]
+  },
+  "output": {
+    "format": "csv",
+    "compression": null,
+    "timestamp_suffix": true
+  }
+}
