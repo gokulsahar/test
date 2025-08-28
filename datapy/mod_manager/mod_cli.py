@@ -34,8 +34,18 @@ def _parse_mod_config(config: Dict[str, Any], mod_name: str) -> tuple[str, Dict[
     Raises:
         ValueError: If mod configuration is invalid
     """
-    if 'mods' not in config or not isinstance(config['mods'], dict):
-        raise ValueError("YAML file missing or invalid 'mods' section")
+    # FIXED: Add None check first
+    if config is None:
+        raise ValueError("Configuration is None - YAML file may be empty or invalid")
+    
+    if not isinstance(config, dict):
+        raise ValueError(f"Configuration must be a dictionary, got {type(config)}")
+    
+    if 'mods' not in config:
+        raise ValueError("YAML file missing 'mods' section")
+    
+    if not isinstance(config['mods'], dict):
+        raise ValueError("YAML file 'mods' section must be a dictionary")
     
     if mod_name not in config['mods']:
         available_mods = list(config['mods'].keys())
@@ -84,12 +94,12 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
     try:
         # Validate mod_name
         if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
-            click.echo("Error: mod_name must be a non-empty string", err=True)
+            click.echo("Error: mod_name must be a non-empty string")  # FIXED: removed err=True
             sys.exit(VALIDATION_ERROR)
         
         mod_name = mod_name.strip()
         if not mod_name.isidentifier():
-            click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
+            click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier")  # FIXED: removed err=True
             sys.exit(VALIDATION_ERROR)
         
         # Setup logging from CLI flag only (no YAML globals)
@@ -100,7 +110,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
                 # Setup default console logging
                 setup_console_logging(DEFAULT_LOG_CONFIG)
         except Exception as e:
-            click.echo(f"Error setting up logging: {e}", err=True)
+            click.echo(f"Error setting up logging: {e}")  # FIXED: removed err=True
             sys.exit(RUNTIME_ERROR)
         
         # Setup context if provided
@@ -109,16 +119,38 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
                 set_context(context)
                 click.echo(f"Using context file: {context}")
             except Exception as e:
-                click.echo(f"Error setting context file {context}: {e}", err=True)
+                click.echo(f"Error setting context file {context}: {e}")  # FIXED: removed err=True
                 sys.exit(VALIDATION_ERROR)
         
-        # Load and validate YAML configuration
+        # FIXED: Load and validate YAML configuration with specific error handling
+        config = None
+        mod_type = None
+        mod_params = None
+        
         try:
             config = load_job_config(params)
-            mod_type, mod_params = _parse_mod_config(config, mod_name)
-            
+            if config is None:
+                raise ValueError("YAML file loaded as None - file may be empty")
+                
+        except FileNotFoundError as e:
+            click.echo(f"Error: Parameter file not found: {params}")
+            sys.exit(VALIDATION_ERROR)
+        except RuntimeError as e:
+            # This catches YAML parsing errors from load_job_config
+            click.echo(f"Error: Invalid YAML file: {e}")
+            sys.exit(VALIDATION_ERROR)
         except Exception as e:
-            click.echo(f"Error parsing YAML file {params}: {e}", err=True)
+            click.echo(f"Error loading parameter file {params}: {e}")
+            sys.exit(VALIDATION_ERROR)
+        
+        try:
+            mod_type, mod_params = _parse_mod_config(config, mod_name)
+        except ValueError as e:
+            # This catches mod configuration errors
+            click.echo(f"Error: {e}")
+            sys.exit(VALIDATION_ERROR)
+        except Exception as e:
+            click.echo(f"Error parsing mod configuration: {e}")
             sys.exit(VALIDATION_ERROR)
         
         # Output execution info
@@ -130,7 +162,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
             result = run_mod(mod_type, mod_params, mod_name)
             
         except Exception as e:
-            click.echo(f"Error executing mod: {e}", err=True)
+            click.echo(f"Error executing mod: {e}")  # FIXED: removed err=True
             sys.exit(RUNTIME_ERROR)
         
         # Create CLI-friendly summary (exclude complex objects)
@@ -168,7 +200,7 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
         # Handle exit code
         exit_code = result.get('exit_code', RUNTIME_ERROR)
         if result['status'] == 'error' and exit_on_error:
-            click.echo(f"Mod failed with exit code: {exit_code}", err=True)
+            click.echo(f"Mod failed with exit code: {exit_code}")  # FIXED: removed err=True
             sys.exit(exit_code)
         elif result['status'] == 'warning':
             sys.exit(SUCCESS_WITH_WARNINGS)
@@ -178,9 +210,9 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
     except SystemExit:
         raise  # Re-raise sys.exit calls
     except Exception as e:
-        click.echo(f"CLI execution failed: {e}", err=True)
+        click.echo(f"CLI execution failed: {e}")  # FIXED: removed err=True
         import traceback
-        click.echo(traceback.format_exc(), err=True)
+        click.echo(traceback.format_exc())  # FIXED: removed err=True
         sys.exit(RUNTIME_ERROR)
 
 
@@ -205,10 +237,25 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
     log_level = ctx.obj.get('log_level')
     
     try:
-        # Validate script path
+        # FIXED: Better path validation
         script_file = Path(script_path)
+        if not script_file.exists():
+            click.echo(f"Error: Script file not found: {script_path}")
+            sys.exit(VALIDATION_ERROR)
+        
         if not script_file.is_file():
-            click.echo(f"Error: Script path is not a file: {script_path}", err=True)
+            click.echo(f"Error: Script path is not a file: {script_path}")
+            sys.exit(VALIDATION_ERROR)
+        
+        # FIXED: Check if file is readable
+        try:
+            with open(script_file, 'r') as f:
+                f.read(1)  # Try to read first character
+        except PermissionError:
+            click.echo(f"Error: Cannot read script file: {script_path}")
+            sys.exit(VALIDATION_ERROR)
+        except Exception as e:
+            click.echo(f"Error: Script file issue: {e}")
             sys.exit(VALIDATION_ERROR)
         
         # Setup logging from CLI flag only (no YAML globals)
@@ -219,7 +266,7 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
                 # Setup default console logging
                 setup_console_logging(DEFAULT_LOG_CONFIG)
         except Exception as e:
-            click.echo(f"Error setting up logging: {e}", err=True)
+            click.echo(f"Error setting up logging: {e}")
             sys.exit(RUNTIME_ERROR)
         
         # Load parameters if provided (but don't extract globals)
@@ -227,10 +274,11 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         if params:
             try:
                 config = load_job_config(params)
-                # Pass entire config as environment variable for script to use
-                script_env['DATAPY_CONFIG'] = json.dumps(config)
+                if config is not None:
+                    # Pass entire config as environment variable for script to use
+                    script_env['DATAPY_CONFIG'] = json.dumps(config)
             except Exception as e:
-                click.echo(f"Error loading parameters from {params}: {e}", err=True)
+                click.echo(f"Error loading parameters from {params}: {e}")
                 sys.exit(VALIDATION_ERROR)
         
         logger = setup_logger(__name__)
@@ -249,26 +297,34 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
         env = os.environ.copy()
         env.update(script_env)
         
-        # Execute the Python script
+        # FIXED: Execute the Python script with better error handling and validation
         try:
+            # Validate Python executable
+            if not sys.executable:
+                click.echo("Error: Cannot find Python executable")
+                sys.exit(RUNTIME_ERROR)
+            
             cmd = [sys.executable, str(script_file)]
+            
+            # FIXED: Add shell=False explicitly and better error handling
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
                 text=True, 
                 cwd=script_file.parent,
                 env=env,
-                timeout=3600  # 1 hour timeout
+                timeout=3600,  # 1 hour timeout
+                shell=False  # Explicit shell=False for security
             )
             
-            # Output script results
+            # Output script results to stdout (not stderr)
             if result.stdout:
                 click.echo("--- Script Output ---")
                 click.echo(result.stdout)
             
             if result.stderr:
-                click.echo("--- Script Errors ---", err=True)
-                click.echo(result.stderr, err=True)
+                click.echo("--- Script Errors ---")
+                click.echo(result.stderr)  # FIXED: Show stderr to stdout
             
             logger.info(f"Script execution completed", extra={
                 "exit_code": result.returncode,
@@ -278,26 +334,32 @@ def run_script_command(ctx: click.Context, script_path: str, params: Optional[st
             
             # Handle script exit code
             if result.returncode != 0 and exit_on_error:
-                click.echo(f"Script failed with exit code: {result.returncode}", err=True)
+                click.echo(f"Script failed with exit code: {result.returncode}")
                 sys.exit(result.returncode)
             else:
                 sys.exit(result.returncode)
                 
         except subprocess.TimeoutExpired:
             logger.error("Script execution timed out after 1 hour")
-            click.echo("Error: Script execution timed out after 1 hour", err=True)
+            click.echo("Error: Script execution timed out after 1 hour")
+            sys.exit(RUNTIME_ERROR)
+        except FileNotFoundError as e:
+            click.echo(f"Error: Python executable or script not found: {e}")
+            sys.exit(RUNTIME_ERROR)
+        except PermissionError as e:
+            click.echo(f"Error: Permission denied executing script: {e}")
             sys.exit(RUNTIME_ERROR)
         except Exception as e:
             logger.error(f"Failed to execute script: {e}", exc_info=True)
-            click.echo(f"Failed to execute script: {e}", err=True)
+            click.echo(f"Failed to execute script: {e}")
             sys.exit(RUNTIME_ERROR)
             
     except SystemExit:
         raise  # Re-raise sys.exit calls
     except Exception as e:
-        click.echo(f"CLI execution failed: {e}", err=True)
+        click.echo(f"CLI execution failed: {e}")
         import traceback
-        click.echo(traceback.format_exc(), err=True)
+        click.echo(traceback.format_exc())
         sys.exit(RUNTIME_ERROR)
 
 
