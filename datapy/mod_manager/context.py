@@ -178,37 +178,68 @@ def _substitute_recursive(obj: Any, context: Dict[str, Any]) -> Any:
         return obj
 
 
-def _substitute_string(text: str, context: Dict[str, Any]) -> str:
+def _substitute_string(text: str, context: Dict[str, Any]) -> Any:
     """
-    Substitute variables in a string using ${key.subkey} syntax.
+    Substitute variables in a string, preserving types for pure substitutions.
     
     Args:
         text: String to process
         context: Context data for substitution
         
     Returns:
-        String with variables substituted
+        - Original type if text is exactly "${var.key}" 
+        - String if text contains mixed content
         
     Raises:
         ValueError: If variable substitution fails
     """
-    def replace_var(match):
-        var_path = match.group(1)
+    # Check if entire string is single variable
+    if _is_pure_variable_substitution(text):
+        # Extract variable and return original type
+        var_path = re.match(r'^\$\{([^}]+)\}$', text).group(1)
+        return _get_context_value(var_path, context)
+    else:
+        # Mixed content - substitute and return string
+        def replace_var(match):
+            var_path = match.group(1)
+            try:
+                value = _get_context_value(var_path, context)
+                return str(value)
+            except ValueError as e:
+                raise e
         
-        try:
-            # Navigate nested dictionary using dot notation
-            value = context
-            for key in var_path.split('.'):
-                if not isinstance(value, dict):
-                    raise KeyError(f"Cannot access key '{key}' on non-dict value")
-                value = value[key]
-            
-            return str(value)
-            
-        except (KeyError, TypeError) as e:
-            raise ValueError(f"Context variable not found: ${{{var_path}}} - {e}")
+        return _substitution_pattern.sub(replace_var, text)
+
+def _is_pure_variable_substitution(text: str) -> bool:
+    """Check if string is exactly one variable like '${var.key}' with no other content."""
+    if not isinstance(text, str):
+        return False
+    pattern = r'^\$\{([^}]+)\}$'
+    return bool(re.match(pattern, text))
+
+def _get_context_value(var_path: str, context: Dict[str, Any]) -> Any:
+    """
+    Get context value preserving original type.
     
-    return _substitution_pattern.sub(replace_var, text)
+    Args:
+        var_path: Variable path like 'db.port'
+        context: Context data
+        
+    Returns:
+        Original typed value from context
+        
+    Raises:
+        ValueError: If variable path not found
+    """
+    try:
+        value = context
+        for key in var_path.split('.'):
+            if not isinstance(value, dict):
+                raise KeyError(f"Cannot access key '{key}' on non-dict value")
+            value = value[key]
+        return value
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"Context variable not found: ${{{var_path}}} - {e}")
 
 
 def get_context_info() -> Dict[str, Any]:
