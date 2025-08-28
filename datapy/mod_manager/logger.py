@@ -1,7 +1,7 @@
 """
 Simplified console logging for DataPy framework.
 
-Provides JSON-structured console output with mod context tracking
+Provides tab-delimited console output with mod context tracking
 and configurable log levels. No file management - output to stdout/stderr only.
 """
 
@@ -17,37 +17,84 @@ DEFAULT_LOG_CONFIG = {
 }
 
 
-class DataPyFormatter(logging.Formatter):
-    """JSON formatter for structured logging with simplified fields."""
+# COMMENTED OUT: Original JSON formatter - kept for potential future use
+# class DataPyFormatter(logging.Formatter):
+#     """JSON formatter for structured logging with simplified fields."""
+#     
+#     def format(self, record: logging.LogRecord) -> str:
+#         """
+#         Format log record as JSON structure.
+#         
+#         Args:
+#             record: Log record to format
+#             
+#         Returns:
+#             JSON formatted log entry
+#         """
+#         log_entry = {
+#             "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
+#             "level": record.levelname,
+#             "logger": record.name,
+#             "message": record.getMessage(),
+#         }
+#         
+#         # Add mod-specific context if available
+#         if hasattr(record, 'mod_type'):
+#             log_entry["mod_type"] = record.mod_type
+#         if hasattr(record, 'mod_name'):
+#             log_entry["mod_name"] = record.mod_name
+#         
+#         # Add exception info if present
+#         if record.exc_info:
+#             log_entry["exception"] = self.formatException(record.exc_info)
+#         
+#         # Add any extra fields (filter out internal logging fields)
+#         excluded_fields = {
+#             'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
+#             'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
+#             'relativeCreated', 'thread', 'threadName', 'processName', 
+#             'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
+#             'mod_name', 'message'
+#         }
+#         
+#         for key, value in record.__dict__.items():
+#             if key not in excluded_fields and not key.startswith('_'):
+#                 try:
+#                     # Ensure value is JSON serializable
+#                     json.dumps(value, default=str)
+#                     log_entry[key] = value
+#                 except (TypeError, ValueError):
+#                     log_entry[key] = str(value)
+#         
+#         return json.dumps(log_entry, default=str)
+
+
+class TabDelimitedFormatter(logging.Formatter):
+    """Tab-delimited formatter for human-friendly logs that can be loaded into databases."""
     
     def format(self, record: logging.LogRecord) -> str:
         """
-        Format log record as JSON structure.
+        Format log record as tab-delimited structure.
+        
+        Format: TIMESTAMP \t LEVEL \t LOGGER \t MOD_TYPE \t MOD_NAME \t MESSAGE \t EXTRA_FIELDS
         
         Args:
             record: Log record to format
             
         Returns:
-            JSON formatted log entry
+            Tab-delimited log entry
         """
-        log_entry = {
-            "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+        # Core fields
+        timestamp = datetime.fromtimestamp(record.created).isoformat() + "Z"
+        level = record.levelname
+        logger_name = record.name
+        message = record.getMessage()
         
-        # Add mod-specific context if available
-        if hasattr(record, 'mod_type'):
-            log_entry["mod_type"] = record.mod_type
-        if hasattr(record, 'mod_name'):
-            log_entry["mod_name"] = record.mod_name
+        # Mod context fields (use '-' for empty)
+        mod_type = getattr(record, 'mod_type', '-')
+        mod_name = getattr(record, 'mod_name', '-')
         
-        # Add exception info if present
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-        
-        # Add any extra fields (filter out internal logging fields)
+        # Collect extra fields (exclude standard logging fields and mod context)
         excluded_fields = {
             'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
             'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
@@ -56,21 +103,50 @@ class DataPyFormatter(logging.Formatter):
             'mod_name', 'message'
         }
         
+        extra_fields = {}
         for key, value in record.__dict__.items():
             if key not in excluded_fields and not key.startswith('_'):
                 try:
                     # Ensure value is JSON serializable
                     json.dumps(value, default=str)
-                    log_entry[key] = value
+                    extra_fields[key] = value
                 except (TypeError, ValueError):
-                    log_entry[key] = str(value)
+                    extra_fields[key] = str(value)
         
-        return json.dumps(log_entry, default=str)
+        # Handle exceptions
+        if record.exc_info:
+            exception_text = self.formatException(record.exc_info)
+            extra_fields["exception"] = exception_text
+        
+        # Convert extra fields to JSON string
+        if extra_fields:
+            extra_fields_str = json.dumps(extra_fields, default=str)
+        else:
+            extra_fields_str = '-'
+        
+        # Escape tabs and newlines in core fields
+        message = message.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+        logger_name = logger_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+        mod_type = mod_type.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+        mod_name = mod_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+        
+        # Build tab-delimited log entry
+        log_parts = [
+            timestamp,
+            level,
+            logger_name,
+            mod_type,
+            mod_name,
+            message,
+            extra_fields_str
+        ]
+        
+        return '\t'.join(log_parts)
 
 
 def setup_console_logging(log_config: Dict[str, Any]) -> None:
     """
-    Setup JSON logging to console (stdout/stderr).
+    Setup tab-delimited logging to console (stdout/stderr).
     
     Args:
         log_config: Logging configuration dictionary
@@ -93,9 +169,9 @@ def setup_console_logging(log_config: Dict[str, Any]) -> None:
         # Clear any existing handlers to avoid duplicates
         root_logger.handlers.clear()
         
-        # Setup console handler with JSON formatting
+        # Setup console handler with tab-delimited formatting
         console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setFormatter(DataPyFormatter())
+        console_handler.setFormatter(TabDelimitedFormatter())
         root_logger.addHandler(console_handler)
             
         # Test logging works
