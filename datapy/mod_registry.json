@@ -3,9 +3,64 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2025-08-27T22:39:17.011215"
+    "last_updated": "2025-08-28T12:50:33.027671"
   },
   "mods": {
-
+    "csv_reader": {
+      "module_path": "datapy.mods.sources.csv_reader",
+      "type": "csv_reader",
+      "version": "1.0.0",
+      "description": "Reads data from CSV files with configurable options",
+      "category": "source",
+      "input_ports": [],
+      "output_ports": [
+        "data"
+      ],
+      "globals": [
+        "row_count",
+        "column_count",
+        "file_size"
+      ],
+      "packages": [
+        "pandas>=1.5.0"
+      ],
+      "python_version": ">=3.8",
+      "config_schema": {
+        "required": {
+          "file_path": {
+            "type": "str",
+            "description": "Path to CSV file to read"
+          }
+        },
+        "optional": {
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding (utf-8, latin-1, etc.)"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "CSV delimiter character"
+          },
+          "header": {
+            "type": "int",
+            "default": 0,
+            "description": "Row number for column headers (0=first row, None=no headers)"
+          },
+          "skip_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of rows to skip at start of file"
+          },
+          "max_rows": {
+            "type": "int",
+            "default": null,
+            "description": "Maximum number of rows to read (None=all)"
+          }
+        }
+      },
+      "registered_at": "2025-08-28T12:50:33.027666"
+    }
   }
 }

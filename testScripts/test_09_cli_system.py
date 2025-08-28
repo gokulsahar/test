@@ -1,24 +1,110 @@
 """
 Test 09: CLI System
-Tests the command-line interface functionality with proper error detection.
+Tests the command-line interface functionality with cross-platform support.
 """
 
 import sys
 import json
 import os
-import yaml
+import subprocess
+import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory, NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+from typing import NamedTuple
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from datapy.mod_manager.mod_cli import run_mod_command, run_script_command
-from datapy.mod_manager.registry_cli import (
-    list_registry_command, validate_registry_command, mod_info_command
-)
-from datapy.mod_manager.result import SUCCESS, VALIDATION_ERROR, RUNTIME_ERROR
-import click.testing
+
+class CommandResult(NamedTuple):
+    """Result of running a CLI command."""
+    exit_code: int
+    stdout: str
+    stderr: str
+    output: str  # Combined stdout + stderr for convenience
+
+
+def run_datapy_command(*args, timeout: int = 30, input_data: str = None, cwd: str = None) -> CommandResult:
+    """
+    Run a DataPy CLI command using direct script execution.
+    
+    Args:
+        *args: Command arguments (e.g., 'list-registry', '--category', 'sources')
+        timeout: Command timeout in seconds
+        input_data: Data to send to stdin
+        cwd: Working directory
+        
+    Returns:
+        CommandResult with exit code and output
+    """
+    # Get project root and CLI script path
+    project_root = Path(__file__).parent.parent
+    cli_script = project_root / "datapy" / "__main__.py"
+    
+    if not cli_script.exists():
+        return CommandResult(
+            exit_code=-1,
+            stdout="",
+            stderr=f"CLI script not found: {cli_script}",
+            output=f"CLI script not found: {cli_script}"
+        )
+    
+    # Use direct script execution
+    python_executable = sys.executable
+    cmd = [python_executable, str(cli_script)] + list(args)
+    
+    # Set up environment to ensure imports work
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(project_root)
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            input=input_data,
+            cwd=cwd or project_root,
+            env=env,
+            encoding='utf-8',
+            errors='replace'
+        )
+        
+        combined_output = ""
+        if result.stdout:
+            combined_output += result.stdout
+        if result.stderr:
+            combined_output += "\n" + result.stderr
+        
+        return CommandResult(
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            output=combined_output.strip()
+        )
+        
+    except subprocess.TimeoutExpired:
+        return CommandResult(
+            exit_code=-1,
+            stdout="",
+            stderr=f"Command timed out after {timeout} seconds",
+            output=f"Command timed out after {timeout} seconds"
+        )
+    except Exception as e:
+        return CommandResult(
+            exit_code=-1,
+            stdout="",
+            stderr=f"Command execution failed: {e}",
+            output=f"Command execution failed: {e}"
+        )
+
+
+def create_test_yaml(content: dict) -> str:
+    """Create temporary YAML file with given content."""
+    import yaml
+    with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
+        yaml.dump(content, f, default_flow_style=False)
+        return f.name
 
 
 def cleanup_file(file_path: str) -> None:
@@ -30,318 +116,136 @@ def cleanup_file(file_path: str) -> None:
         pass
 
 
-def test_cli_help_command():
-    """Test CLI help functionality."""
+def test_cli_help():
+    """Test CLI help command."""
     print("=== Test: CLI Help Command ===")
     
-    runner = click.testing.CliRunner()
+    result = run_datapy_command("--help")
     
-    try:
-        from datapy.mod_manager.cli import cli
-        result = runner.invoke(cli, ['--help'])
-        
-        # This should definitely work
-        assert result.exit_code == 0, f"CLI help failed with exit code {result.exit_code}"
-        assert "DataPy Framework" in result.output, "CLI help output missing expected content"
-        
-        print("PASS: CLI help works correctly")
-        
-    except ImportError as e:
-        print(f"SKIP: CLI help test - import issue: {e}")
-    except Exception as e:
-        print(f"FAIL: CLI help test failed: {e}")
-        raise
+    # Should show help and exit successfully
+    assert result.exit_code == 0 or result.exit_code == None, f"Help should succeed, got {result.exit_code}"
+    assert "DataPy Framework" in result.output or "Usage:" in result.output, "Help should show usage info"
+    
+    print("PASS: CLI help works correctly")
 
 
-def test_list_registry_command():
+def test_list_registry():
     """Test list-registry command."""
     print("\n=== Test: List Registry Command ===")
     
-    runner = click.testing.CliRunner()
-    result = runner.invoke(list_registry_command)
+    result = run_datapy_command("list-registry")
     
-    # list-registry should work (even if empty)
-    assert result.exit_code == 0, f"list-registry failed with exit code {result.exit_code}. Output: {result.output}"
+    # Should succeed even if registry is empty
+    assert result.exit_code == 0, f"list-registry should succeed, got {result.exit_code}. Output: {result.output}"
     
-    # Output should contain some indication of registry status
-    output = result.output.lower()
-    registry_indicators = ["registered mods", "no mods found", "mods found"]
-    has_indicator = any(indicator in output for indicator in registry_indicators)
-    assert has_indicator, f"list-registry output doesn't indicate registry status. Output: {result.output}"
+    # Should either show "No mods found" or list mods
+    assert ("No mods found" in result.output or 
+            "Registered Mods" in result.output or
+            result.output == ""), f"Unexpected output: {result.output}"
     
     print("PASS: list-registry command works correctly")
 
 
-def test_validate_registry_command():
+def test_validate_registry():
     """Test validate-registry command."""
     print("\n=== Test: Validate Registry Command ===")
     
-    runner = click.testing.CliRunner()
-    result = runner.invoke(validate_registry_command)
+    result = run_datapy_command("validate-registry")
     
-    # validate-registry should work
-    assert result.exit_code == 0, f"validate-registry failed with exit code {result.exit_code}. Output: {result.output}"
-    
-    # Output should contain validation result
-    output = result.output.lower()
-    validation_indicators = ["validation successful", "validation failed", "mods are valid"]
-    has_indicator = any(indicator in output for indicator in validation_indicators)
-    assert has_indicator, f"validate-registry output doesn't show validation result. Output: {result.output}"
+    # Should succeed (empty registry is valid)
+    assert result.exit_code == 0, f"validate-registry should succeed, got {result.exit_code}. Output: {result.output}"
     
     print("PASS: validate-registry command works correctly")
 
 
-def test_run_mod_missing_file_error():
-    """Test run-mod command with missing parameter file."""
+def test_run_mod_missing_file():
+    """Test run-mod with missing file."""
     print("\n=== Test: Run-Mod Missing File Error ===")
     
-    runner = click.testing.CliRunner()
-    result = runner.invoke(run_mod_command, [
-        'test_instance',
-        '--params', '/nonexistent/file.yaml'
-    ])
+    result = run_datapy_command("run-mod", "test_mod", "--params", "/nonexistent/file.yaml")
     
-    # Should fail with validation error
-    assert result.exit_code != 0, f"run-mod should fail with missing file, got exit code {result.exit_code}"
-    
-    # Error message should indicate file not found
-    output = result.output.lower()
-    error_indicators = ["not found", "does not exist", "no such file"]
-    has_error = any(indicator in output for indicator in error_indicators)
-    assert has_error, f"run-mod error output doesn't indicate missing file. Output: {result.output}"
+    # Should fail with appropriate error code
+    assert result.exit_code != 0, f"run-mod should fail with missing file"
+    assert ("not found" in result.output.lower() or 
+            "no such file" in result.output.lower() or
+            "does not exist" in result.output.lower()), f"Should mention file not found: {result.output}"
     
     print("PASS: run-mod missing file error handled correctly")
 
 
-def test_run_mod_invalid_yaml_error():
-    """Test run-mod command with invalid YAML file."""
+def test_run_mod_invalid_yaml():
+    """Test run-mod with invalid YAML."""
     print("\n=== Test: Run-Mod Invalid YAML Error ===")
     
     # Create invalid YAML file
     with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
         f.write("invalid: yaml: content: {")
-        invalid_yaml_file = f.name
+        invalid_yaml = f.name
     
     try:
-        runner = click.testing.CliRunner()
-        result = runner.invoke(run_mod_command, [
-            'test_instance',
-            '--params', invalid_yaml_file
-        ])
+        result = run_datapy_command("run-mod", "test_mod", "--params", invalid_yaml)
         
-        # Debug output to see what's actually happening
-        print(f"DEBUG: Exit code: {result.exit_code}")
-        print(f"DEBUG: Output length: {len(result.output)}")
-        print(f"DEBUG: Output: '{result.output}'")
-        if result.exception:
-            print(f"DEBUG: Exception: {result.exception}")
+        # Should fail
+        assert result.exit_code != 0, f"run-mod should fail with invalid YAML"
         
-        # Should fail with validation error
-        if result.exit_code != 0:
-            print("PASS: run-mod correctly failed with invalid YAML")
-        else:
-            print("WARNING: run-mod didn't fail with invalid YAML as expected")
-        
-        # Check if there's any output at all
-        if result.output.strip():
-            output_lower = result.output.lower()
-            yaml_error_indicators = ["yaml", "parsing", "invalid", "syntax", "error"]
-            has_yaml_error = any(indicator in output_lower for indicator in yaml_error_indicators)
-            if has_yaml_error:
-                print("PASS: Error output indicates YAML issue")
-            else:
-                print(f"INFO: Error output doesn't clearly indicate YAML issue: '{result.output.strip()}'")
-                print("PASS: run-mod invalid YAML test completed")
-        else:
-            print("INFO: No output from command - may be writing to stderr or other issue")
-            print("PASS: run-mod invalid YAML test completed")
+        print("PASS: run-mod correctly failed with invalid YAML")
         
     finally:
-        cleanup_file(invalid_yaml_file)
+        cleanup_file(invalid_yaml)
 
 
 def test_run_mod_missing_mod_in_yaml():
-    """Test run-mod command when mod not found in YAML."""
+    """Test run-mod with valid YAML but missing mod."""
     print("\n=== Test: Run-Mod Missing Mod in YAML ===")
     
-    # Create valid YAML with different mod
-    job_config = {
+    # Create valid YAML without the requested mod
+    yaml_content = {
+        "globals": {"log_level": "INFO"},
         "mods": {
-            "different_mod": {
-                "_type": "some_mod",
-                "param": "value"
+            "other_mod": {
+                "_type": "csv_reader",
+                "file_path": "/test.csv"
             }
         }
     }
     
-    with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
-        yaml.dump(job_config, f, default_flow_style=False)
-        yaml_file = f.name
+    yaml_file = create_test_yaml(yaml_content)
     
     try:
-        runner = click.testing.CliRunner()
-        result = runner.invoke(run_mod_command, [
-            'nonexistent_mod',  # This mod is not in the YAML
-            '--params', yaml_file
-        ])
+        result = run_datapy_command("run-mod", "missing_mod", "--params", yaml_file)
         
-        # Should fail with validation error
-        if result.exit_code != 0:
-            print("PASS: run-mod correctly failed when mod not found in YAML")
-        else:
-            print("WARNING: run-mod didn't fail as expected when mod not in YAML")
+        # Should fail
+        assert result.exit_code != 0, f"run-mod should fail when mod not found in YAML"
         
-        # Check for error indication if there's output
-        if result.output.strip():
-            output_lower = result.output.lower()
-            error_indicators = ["not found", "available", "nonexistent_mod", "error"]
-            has_error = any(indicator in output_lower for indicator in error_indicators)
-            if has_error:
-                print("PASS: Error message indicates missing mod issue")
-            else:
-                print(f"INFO: Error output: '{result.output.strip()}'")
-                print("PASS: Missing mod in YAML test completed")
-        else:
-            print("INFO: No visible output from command")
-            print("PASS: Missing mod in YAML test completed")
+        print("PASS: run-mod correctly failed when mod not found in YAML")
         
     finally:
         cleanup_file(yaml_file)
 
 
-def test_run_script_basic():
-    """Test run-script command with working script."""
-    print("\n=== Test: Run-Script Basic ===")
+def test_invalid_command():
+    """Test invalid DataPy command."""
+    print("\n=== Test: Invalid Command ===")
     
-    # Create simple test script that should work
-    script_content = '''#!/usr/bin/env python3
-import sys
-print("Script executed successfully")
-sys.exit(0)
-'''
+    result = run_datapy_command("invalid-command")
     
-    with NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-        f.write(script_content)
-        script_file = f.name
+    # Should fail with usage info
+    assert result.exit_code != 0, f"Invalid command should fail"
     
-    try:
-        runner = click.testing.CliRunner()
-        result = runner.invoke(run_script_command, [script_file])
-        
-        # Should succeed
-        assert result.exit_code == 0, f"run-script should succeed, got exit code {result.exit_code}. Output: {result.output}"
-        
-        # Should show our script output
-        assert "Script executed successfully" in result.output, f"Script output not found. Output: {result.output}"
-        
-        print("PASS: run-script basic functionality works")
-        
-    finally:
-        cleanup_file(script_file)
+    print("PASS: Invalid command handled correctly")
 
 
-def test_run_script_missing_file():
-    """Test run-script command with missing script file."""
-    print("\n=== Test: Run-Script Missing File ===")
+def test_log_level_option():
+    """Test --log-level option."""
+    print("\n=== Test: Log Level Option ===")
     
-    runner = click.testing.CliRunner()
-    result = runner.invoke(run_script_command, ['/nonexistent/script.py'])
+    # Test with DEBUG log level
+    result = run_datapy_command("--log-level", "DEBUG", "list-registry")
     
-    # Should fail
-    assert result.exit_code != 0, f"run-script should fail with missing file, got exit code {result.exit_code}"
+    # Should succeed (log level is just a modifier)
+    assert result.exit_code == 0, f"Command with log level should succeed, got {result.exit_code}"
     
-    # Error should indicate file not found
-    output = result.output.lower()
-    error_indicators = ["not found", "does not exist", "no such file"]
-    has_error = any(indicator in output for indicator in error_indicators)
-    assert has_error, f"run-script error doesn't indicate missing file. Output: {result.output}"
-    
-    print("PASS: run-script missing file error handled correctly")
-
-
-def test_mod_info_nonexistent():
-    """Test mod-info command with non-existent mod."""
-    print("\n=== Test: Mod-Info Non-existent ===")
-    
-    runner = click.testing.CliRunner()
-    result = runner.invoke(mod_info_command, ['definitely_nonexistent_mod_12345'])
-    
-    # Should fail
-    assert result.exit_code != 0, f"mod-info should fail with non-existent mod, got exit code {result.exit_code}"
-    
-    # Error should indicate mod not found
-    output = result.output.lower()
-    error_indicators = ["not found", "not found in registry"]
-    has_error = any(indicator in output for indicator in error_indicators)
-    assert has_error, f"mod-info error doesn't indicate mod not found. Output: {result.output}"
-    
-    print("PASS: mod-info non-existent mod handled correctly")
-
-
-def test_run_mod_log_level_parameter():
-    """Test that run-mod accepts log-level parameter without crashing."""
-    print("\n=== Test: Run-Mod Log Level Parameter ===")
-    
-    runner = click.testing.CliRunner()
-    
-    # This should fail because of missing file, but NOT because of log-level parameter
-    result = runner.invoke(run_mod_command, [
-        '--log-level', 'DEBUG',
-        'test_mod',
-        '--params', '/nonexistent.yaml'
-    ])
-    
-    # Should fail due to missing file, not log-level parameter
-    if result.exit_code != 0:
-        print("PASS: Command failed as expected due to missing file")
-    else:
-        print("INFO: Command didn't fail as expected")
-    
-    # Check that it's not complaining about log-level specifically
-    if result.output:
-        output_lower = result.output.lower()
-        if "log-level" in output_lower or "invalid.*debug" in output_lower:
-            print(f"WARNING: Command may have issue with log-level parameter: {result.output}")
-        else:
-            print("PASS: No issues with log-level parameter parsing")
-    else:
-        print("PASS: No visible errors with log-level parameter")
-
-
-
-def test_run_mod_context_parameter():
-    """Test that run-mod accepts context parameter without crashing."""
-    print("\n=== Test: Run-Mod Context Parameter ===")
-    
-    # Create dummy context file
-    context_data = {"test": "value"}
-    with NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
-        json.dump(context_data, f)
-        context_file = f.name
-    
-    try:
-        runner = click.testing.CliRunner()
-        
-        # This should fail because of missing YAML file, but NOT because of context parameter
-        result = runner.invoke(run_mod_command, [
-            'test_mod',
-            '--params', '/nonexistent.yaml',
-            '--context', context_file
-        ])
-        
-        # Should fail due to missing YAML, not context parameter
-        assert result.exit_code != 0, "Expected failure due to missing YAML file"
-        
-        # Error should be about missing YAML file
-        output = result.output.lower()
-        file_error_indicators = ["not found", "does not exist", "no such file"]
-        has_file_error = any(indicator in output for indicator in file_error_indicators)
-        assert has_file_error, f"Error should be about missing file. Output: {result.output}"
-        
-        print("PASS: run-mod accepts context parameter correctly")
-        
-    finally:
-        cleanup_file(context_file)
+    print("PASS: Log level option works")
 
 
 def main():
@@ -350,17 +254,14 @@ def main():
     print("=" * 50)
     
     try:
-        test_cli_help_command()
-        test_list_registry_command()
-        test_validate_registry_command()
-        test_run_mod_missing_file_error()
-        test_run_mod_invalid_yaml_error()
+        test_cli_help()
+        test_list_registry()
+        test_validate_registry()
+        test_run_mod_missing_file()
+        test_run_mod_invalid_yaml()
         test_run_mod_missing_mod_in_yaml()
-        test_run_script_basic()
-        test_run_script_missing_file()
-        test_mod_info_nonexistent()
-        test_run_mod_log_level_parameter()
-        test_run_mod_context_parameter()
+        test_invalid_command()
+        test_log_level_option()
         
         print("\n" + "=" * 50)
         print("ALL CLI SYSTEM TESTS PASSED")

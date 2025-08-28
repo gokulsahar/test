@@ -1,12 +1,10 @@
 # DataPy ETL Framework
 
-A Python framework for creating reusable ETL components with unified parameter management, logging, and result handling for workflows that can be invoked from both CLI and Python scripts. An orchestrator layer for simplified workflow management is currently in development.
+A Python framework for creating reusable ETL components with unified parameter management, logging, and result handling for workflows that can be invoked from both CLI and Python scripts.
 
 ## Overview
 
 DataPy provides a modular architecture for building ETL pipelines through reusable components called "mods". Each mod is a self-contained unit with standardized interfaces for parameters, execution, and results. The framework supports both command-line and programmatic execution with comprehensive logging and error handling.
-
-Note: A  orchestrator layer is currently in development to provide simplified workflow management, drag-and-drop pipeline creation, and automated deployment for users who prefer graphical interfaces over code-based configuration.
 
 ## Features
 
@@ -17,7 +15,6 @@ Note: A  orchestrator layer is currently in development to provide simplified wo
 - **Structured JSON Logging**: Comprehensive execution tracking and debugging
 - **Standardized Result Format**: Consistent success/warning/error handling across all components
 - **Extensible Architecture**: Easy creation of custom mods with metadata validation
-- **Future Orchestrator**:  workflow designer and automated pipeline management (in development)
 
 ## Installation
 
@@ -117,9 +114,6 @@ datapy run-mod <mod_name> --params <yaml_file>
 
 # With context variable substitution
 datapy run-mod extract_data --params job.yaml --context prod_context.json
-
-# Execute Python script with framework features
-datapy run-script pipeline.py --params config.yaml
 ```
 
 ### Registry Management
@@ -149,10 +143,10 @@ datapy delete-mod old_processor
 ### Basic Usage
 
 ```python
-from datapy.mod_manager.sdk import run_mod, set_global_config
+from datapy.mod_manager.sdk import run_mod, set_log_level
 
 # Configure logging
-set_global_config({"log_level": "INFO"})
+set_log_level("INFO")
 
 # Execute mod with auto-generated name
 result = run_mod("csv_reader", {
@@ -363,8 +357,6 @@ datapy mod-info my_custom_processor
 
 ### Multi-Mod Workflows
 
-Currently, multi-mod workflows are configured manually via YAML. A  orchestrator for drag-and-drop workflow creation is in development.
-
 ```yaml
 # complex_workflow.yaml
 globals:
@@ -386,28 +378,23 @@ mods:
     output_format: "parquet"
 ```
 
-### Script Integration
+### Python Script Integration
 
 ```python
 # pipeline.py
-import os
-import json
+import yaml
 from datapy.mod_manager.sdk import run_mod, set_context
 
 def main():
-    # Load configuration if provided via CLI
-    config_data = os.environ.get('DATAPY_CONFIG')
-    if config_data:
-        config = json.loads(config_data)
-        # Use config data in your script
+    # Load configuration
+    with open('workflow_config.yaml') as f:
+        config = yaml.safe_load(f)
     
     # Set environment context
     set_context("config/production.json")
     
     # Execute mods programmatically
-    customers = run_mod("csv_reader", {
-        "file_path": "${data.customer_path}"
-    }, "customer_extract")
+    customers = run_mod("csv_reader", config['mods']['extract_customers'])
     
     if customers['status'] == 'success':
         # Process the extracted data
@@ -421,7 +408,7 @@ if __name__ == "__main__":
 Execute with:
 
 ```bash
-datapy run-script pipeline.py --params workflow_config.yaml
+python pipeline.py
 ```
 
 ## Error Handling
@@ -493,8 +480,6 @@ set_log_level("DEBUG")
 
 ### Project Organization
 
-The framework currently requires manual configuration management. An orchestrator with project templates and automated setup is planned for future releases.
-
 ```
 my_etl_project/
 ├── project_defaults.yaml      # Project configuration
@@ -512,8 +497,6 @@ my_etl_project/
 ```
 
 ### Parameter Management
-
-The framework provides fine-grained parameter control for advanced users. An upcoming orchestrator will offer simplified parameter management with  configuration tools.
 
 1. **Use project defaults** for common settings across mods
 2. **Leverage context files** for environment-specific values
