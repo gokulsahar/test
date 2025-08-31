@@ -5,6 +5,7 @@ Provides clean API for mod execution with parameter validation and execution
 orchestration. No file management - simple console output for shell script capture.
 """
 
+import argparse
 import importlib
 from typing import Dict, Any, Optional
 
@@ -262,3 +263,134 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
     except Exception as e:
         return runtime_error(mod_name or "unknown", f"Unexpected error: {e}")
 
+
+# Command line argument parsing and setup functions
+
+def _parse_common_args() -> Dict[str, Any]:
+    """
+    Parse common command line arguments for SDK.
+    
+    Returns:
+        Dictionary with parsed arguments and flags:
+        {
+            "log_level": str,        # Log level value
+            "log_provided": bool,    # Was --log-level explicitly provided?
+            "context_path": str,     # Context file path  
+            "context_provided": bool # Was --context explicitly provided?
+        }
+    """
+    try:
+        parser = argparse.ArgumentParser(add_help=False)  # Don't interfere with main script help
+        parser.add_argument('--log-level', 
+                           choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
+        parser.add_argument('--context', 
+                           help='Path to context JSON file for variable substitution')
+        
+        # Parse known args only, ignore everything else
+        args, unknown = parser.parse_known_args()
+        
+        return {
+            "log_level": args.log_level.upper() if args.log_level else "INFO",
+            "log_provided": args.log_level is not None,
+            "context_path": args.context if args.context else "",
+            "context_provided": args.context is not None
+        }
+        
+    except Exception:
+        # Any failure - return safe defaults
+        return {
+            "log_level": "INFO",
+            "log_provided": False,
+            "context_path": "",
+            "context_provided": False
+        }
+
+
+def setup_logging(level: str = None, name: str = None) -> Any:
+    """
+    Hybrid logging setup - sets global level and returns a logger for immediate use.
+    
+    Convenience wrapper that combines set_log_level() and setup_logger() into one call.
+    
+    Priority order (command line always wins):
+    1. Command line --log-level argument (highest priority)
+    2. Explicit level parameter (medium priority)  
+    3. Default "INFO" (fallback)
+    
+    Args:
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). 
+               Command line --log-level will override this if present.
+        name: Logger name (typically pass __name__ from calling script).
+              If None, uses "datapy.user" as fallback.
+        
+    Returns:
+        Configured logger instance for immediate use
+        
+    Examples:
+        # Use script name and check command line
+        logger = setup_logging(name=__name__)
+        
+        # Force specific level with script name
+        logger = setup_logging("DEBUG", __name__)
+        
+        # Command line: python script.py --log-level ERROR
+        # Result: ERROR level used (overrides code level)
+    """
+    # Parse command line args
+    cmd_args = _parse_common_args()
+    
+    # Determine final level - command line always wins if provided
+    if cmd_args["log_provided"]:  # User explicitly provided --log-level
+        final_level = cmd_args["log_level"]
+    elif level is not None:  # No command line override, use explicit level
+        final_level = level
+    else:  # No command line, no explicit level
+        final_level = "INFO"
+    
+    # Set global log level (affects ALL logging in framework)
+    set_log_level(final_level)
+    
+    # Determine logger name
+    logger_name = name if name else "datapy.user"
+    
+    # Create and return logger for immediate use
+    from .logger import setup_logger
+    return setup_logger(logger_name)
+
+
+def setup_context(context_path: str = None) -> None:
+    """
+    Hybrid context setup - sets context file with command line override support.
+    
+    Priority order (command line always wins):
+    1. Command line --context argument (highest priority)
+    2. Explicit context_path parameter (medium priority)
+    3. No context set (fallback)
+    
+    Args:
+        context_path: Path to context JSON file.
+                     Command line --context will override this if present.
+        
+    Examples:
+        # Check command line first, then use provided path
+        setup_context("config/dev.json")
+        
+        # Check command line only
+        setup_context()
+        
+        # Command line: python script.py --context config/prod.json  
+        # Result: prod.json used (overrides code path)
+    """
+    # Parse command line args
+    cmd_args = _parse_common_args()
+    
+    # Determine final context path - command line always wins
+    if cmd_args["context_provided"]:  # User explicitly provided --context
+        final_context_path = cmd_args["context_path"]
+    elif context_path is not None:  # No command line override, use explicit path
+        final_context_path = context_path
+    else:  # No command line, no explicit path - don't set context
+        return
+    
+    # Set context using existing SDK function
+    set_context(final_context_path)
