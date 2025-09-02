@@ -1,0 +1,135 @@
+# AccBal Pipeline Flow Diagram
+
+## High-Level Flow
+```
+┌─────────────────┐    ┌─────────────────┐
+│   MAIN FLOW     │    │   SF FLOW       │
+│  Data Process   │    │  Connection     │
+└─────────┬───────┘    └─────────┬───────┘
+          │                      │
+          └──────┬─────┬─────────┘
+                 ▼     ▼
+          ┌─────────────────┐
+          │   BULK LOAD     │
+          │   (Converge)    │
+          └─────────────────┘
+```
+
+## Detailed ASCII Flow
+
+```
+START PIPELINE
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│                PARALLEL EXECUTION                       │
+│                                                         │
+│  ┌─────────────────┐           ┌─────────────────┐      │
+│  │   MAIN FLOW     │           │   SF FLOW       │      │
+│  │                 │           │                 │      │
+│  │ main_flow_start │           │ sf_flow_start   │      │
+│  │       │         │           │       │         │      │
+│  │       ▼         │           │       ▼         │      │
+│  │  file_finder    │           │ sf_connection   │      │
+│  │       │         │           │       │         │      │
+│  │       ▼         │           │       ▼         │      │
+│  │   csv_reader    │           │sf_connection_   │      │
+│  │       │         │           │  controller     │      │
+│  │       ▼         │           │    │      │     │      │
+│  │column_transform │           │    ▼      ▼     │      │
+│  │       │         │           │  TRUE   FALSE   │      │
+│  │       ▼         │           │    │      │     │      │
+│  │csv_writer_      │           │    │   failure_ │      │
+│  │  processed      │           │    │   handler  │      │
+│  │       │         │           │    │            │      │
+│  └───────┼─────────┘           └────┼────────────┘      │
+│          │                          │                   │
+└──────────┼──────────────────────────┼───────────────────┘
+           │                          │
+           ▼                          ▼
+     ┌─────────────────────────────────────┐
+     │          CONVERGENCE POINT          │
+     │                                     │
+     │         sf_bulk_load               │
+     │     (Waits for BOTH inputs)        │
+     │                                     │
+     │  Input 1: Processed CSV data       │
+     │  Input 2: SF connection success    │
+     │                                     │
+     └─────────────────┬───────────────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │   POST-PROCESS  │
+              │                 │
+              │ csv_writer_     │
+              │   rejects       │
+              │       │         │
+              │       ▼         │
+              │   end_script    │
+              │                 │
+              └─────────────────┘
+```
+
+## Component Dependencies
+```
+Dependencies Flow:
+
+MAIN FLOW:
+main_flow_start → file_finder → csv_reader → column_transformer → csv_writer_processed
+                                                                          │
+                                                                          ▼
+SF FLOW:                                                         sf_bulk_load
+sf_flow_start → sf_connection → sf_connection_controller                  │
+                                        │                                 ▼
+                                        ▼                      csv_writer_rejects
+                               sf_failure_handler                         │
+                                                                          ▼
+                                                                    end_script
+```
+
+## Timeline View
+```
+Time →  0s    2s    4s    6s    8s    10s   12s   14s   16s   18s   20s
+        │     │     │     │     │     │     │     │     │     │     │
+Main:   Start─File──Read──Transform──Write─────────────────────────┐
+        │     │     │     │     │                                  │
+SF:     Start─────SF_Conn─────Controller─────┐                     │
+        │                                    │                     │
+        │                                    ▼                     ▼
+        └─────────────────────────────── BULK_LOAD ──Rejects── END
+```
+
+## Error Handling Flow
+```
+SF Connection Success Path:
+sf_connection → sf_connection_controller.true → sf_bulk_load
+
+SF Connection Failure Path:
+sf_connection → sf_connection_controller.false → sf_failure_handler
+
+Data Processing Path (Always):
+csv_reader → column_transformer → csv_writer_processed → sf_bulk_load
+
+Bulk Load Results:
+sf_bulk_load.rejects → csv_writer_rejects → end_script
+```
+
+## Key Synchronization Points
+1. **Parallel Start**: Main and SF flows start simultaneously
+2. **Convergence**: Both flows must complete before bulk load
+3. **Final**: Rejects processing and summary generation
+
+## Global Variables Flow
+```
+file_finder creates:     file_finder__CURRENT_FILEPATH
+                        file_finder__FILENAME
+
+sf_connection creates:   sf_connection__SF_ACCESS_TOKEN
+                        sf_connection__SF_INSTANCE_URL
+                        sf_connection__SF_CONNECTION_STATUS
+
+sf_bulk_load creates:    sf_bulk_load__SF_SUCCESS_RECORDS
+                        sf_bulk_load__SF_FAILED_RECORDS
+                        sf_bulk_load__SF_JOB_ID
+```
