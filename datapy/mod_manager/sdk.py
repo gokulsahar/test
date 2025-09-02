@@ -325,16 +325,6 @@ def setup_logging(level: str = None, name: str = None) -> Any:
         
     Returns:
         Configured logger instance for immediate use
-        
-    Examples:
-        # Use script name and check command line
-        logger = setup_logging(name=__name__)
-        
-        # Force specific level with script name
-        logger = setup_logging("DEBUG", __name__)
-        
-        # Command line: python script.py --log-level ERROR
-        # Result: ERROR level used (overrides code level)
     """
     # Parse command line args
     cmd_args = _parse_common_args()
@@ -370,16 +360,6 @@ def setup_context(context_path: str = None) -> None:
     Args:
         context_path: Path to context JSON file.
                      Command line --context will override this if present.
-        
-    Examples:
-        # Check command line first, then use provided path
-        setup_context("config/dev.json")
-        
-        # Check command line only
-        setup_context()
-        
-        # Command line: python script.py --context config/prod.json  
-        # Result: prod.json used (overrides code path)
     """
     # Parse command line args
     cmd_args = _parse_common_args()

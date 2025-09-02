@@ -20,8 +20,7 @@ METADATA = ModMetadata(
     input_ports=["data"],
     output_ports=["filtered_data"],
     globals=["filtered_rows", "original_rows", "filter_rate"],
-    packages=["pandas>=1.5.0"],
-    python_version=">=3.8"
+    packages=["pandas>=1.5.0"]
 )
 
 # Parameter schema

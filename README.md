@@ -252,8 +252,7 @@ METADATA = ModMetadata(
     input_ports=["data"],
     output_ports=["processed_data"],
     globals=["record_count", "process_time"],
-    packages=["pandas>=1.5.0"],
-    python_version=">=3.8"
+    packages=["pandas>=1.5.0"]
 )
 
 # Parameter schema

@@ -251,20 +251,15 @@ def reset_logging() -> None:
     Reset logging state for testing.
     
     Warning: This should only be used in testing environments.
+    
+    Raises:
+        RuntimeError: If logging reset fails.
     """
     try:
-        # Clear all handlers from root logger
         root_logger = logging.getLogger()
         for handler in root_logger.handlers[:]:
-            try:
-                handler.close()
-            except:
-                pass
+            handler.close()
             root_logger.removeHandler(handler)
-        
-        # Reset log level
         root_logger.setLevel(logging.WARNING)
-        
     except Exception as e:
-        # Don't fail on cleanup
-        print(f"Warning: Failed to reset logging: {e}")
+        raise RuntimeError(f"Failed to reset logging: {e}") from e

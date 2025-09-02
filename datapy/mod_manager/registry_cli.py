@@ -149,9 +149,7 @@ def mod_info_command(mod_type: str) -> None:
         
         # Display dependencies
         packages = mod_info.get('packages', [])
-        python_version = mod_info.get('python_version', 'unknown')
         click.echo(f"Packages: {packages}")
-        click.echo(f"Python Version: {python_version}")
         
         if 'registered_at' in mod_info:
             click.echo(f"Registered: {mod_info['registered_at']}")

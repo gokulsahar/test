@@ -19,12 +19,11 @@ class ModMetadata(BaseModel):
             type="csv_reader",
             version="1.0.0", 
             description="Reads data from CSV files",
-            category="sources",
+            category="source",
             input_ports=[],
             output_ports=["data"],
             globals=["row_count", "file_size"],
-            packages=["pandas>=1.5.0", "chardet>=4.0.0"],
-            python_version=">=3.8"
+            packages=["pandas>=1.5.0", "chardet>=4.0.0"]
         )
     """
     # Basic metadata
@@ -40,7 +39,6 @@ class ModMetadata(BaseModel):
     
     # Dependency metadata
     packages: List[str] = Field(default_factory=list, description="Required Python packages")
-    python_version: str = Field(default=">=3.8", description="Required Python version")
     
     @field_validator('type')
     @classmethod
@@ -79,16 +77,28 @@ class ModMetadata(BaseModel):
     @field_validator('category')
     @classmethod
     def validate_category(cls, v: str) -> str:
-        """Validate category follows framework categories."""
+        """Validate category is a non-empty string."""
         if not v or not isinstance(v, str):
             raise ValueError("category cannot be empty")
+        return v.strip()
+    
+    @field_validator('packages')
+    @classmethod
+    def validate_packages(cls, v: List[str]) -> List[str]:
+        """Validate package requirements follow pip format."""
+        if not isinstance(v, list):
+            raise ValueError("packages must be a list")
         
-        # Allow framework categories
-        valid_categories = ['source', 'transformer', 'sink', 'solo']
-        if v not in valid_categories:
-            raise ValueError(f"category must be one of: {valid_categories}")
+        for pkg in v:
+            if not isinstance(pkg, str) or not pkg.strip():
+                raise ValueError("each package must be a non-empty string")
             
-        return v
+            # Basic validation for pip requirement format
+            pkg_clean = pkg.strip()
+            if not re.match(r'^[a-zA-Z0-9_-]+([><=!]+[0-9.]+.*)?$', pkg_clean):
+                raise ValueError(f"invalid package requirement format: {pkg}")
+        
+        return [pkg.strip() for pkg in v]
 
 
 class ConfigSchema(BaseModel):
@@ -116,6 +126,8 @@ class ConfigSchema(BaseModel):
         if not isinstance(v, dict):
             raise ValueError("Parameter schema must be a dictionary")
         
+        valid_types = {'str', 'int', 'float', 'bool', 'list', 'dict', 'object'}
+        
         for param_name, param_def in v.items():
             if not isinstance(param_def, dict):
                 raise ValueError(f"Parameter definition for '{param_name}' must be a dictionary")
@@ -125,6 +137,49 @@ class ConfigSchema(BaseModel):
             
             if 'description' not in param_def:
                 raise ValueError(f"Parameter '{param_name}' missing required 'description' field")
+            
+            # Validate type field
+            param_type = param_def['type']
+            if not isinstance(param_type, str) or param_type not in valid_types:
+                raise ValueError(f"Parameter '{param_name}' has invalid type '{param_type}'. Valid types: {valid_types}")
+            
+            # Validate description
+            description = param_def['description']
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"Parameter '{param_name}' description must be a non-empty string")
+            
+            # Validate default value type matches declared type (if present)
+            if 'default' in param_def:
+                default_val = param_def['default']
+                if not cls._validate_default_type(default_val, param_type):
+                    raise ValueError(f"Parameter '{param_name}' default value type doesn't match declared type '{param_type}'")
         
         return v
-
+    
+    @staticmethod
+    def _validate_default_type(value: Any, declared_type: str) -> bool:
+        """Validate default value matches declared type."""
+        if value is None:
+            return True  # None is valid for any type
+        
+        type_checks = {
+            'str': lambda x: isinstance(x, str),
+            'int': lambda x: isinstance(x, int) and not isinstance(x, bool),  # bool is subclass of int
+            'float': lambda x: isinstance(x, (int, float)) and not isinstance(x, bool),
+            'bool': lambda x: isinstance(x, bool),
+            'list': lambda x: isinstance(x, list),
+            'dict': lambda x: isinstance(x, dict),
+            'object': lambda x: True  # object accepts anything
+        }
+        
+        return type_checks.get(declared_type, lambda x: False)(value)
+    
+    @field_validator('required')
+    @classmethod
+    def validate_required_no_defaults(cls, v: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Validate required parameters don't have default values."""
+        for param_name, param_def in v.items():
+            if 'default' in param_def:
+                raise ValueError(f"Required parameter '{param_name}' cannot have a default value")
+        
+        return v

@@ -294,7 +294,6 @@ class ModRegistry:
             "output_ports": metadata.output_ports,
             "globals": metadata.globals,
             "packages": metadata.packages,
-            "python_version": metadata.python_version,
             "config_schema": {
                 "required": config_schema.required,
                 "optional": config_schema.optional

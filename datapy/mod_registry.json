@@ -24,7 +24,6 @@
       "packages": [
         "pandas>=1.5.0"
       ],
-      "python_version": ">=3.8",
       "config_schema": {
         "required": {
           "file_path": {
@@ -82,7 +81,6 @@
       "packages": [
         "pandas>=1.5.0"
       ],
-      "python_version": ">=3.8",
       "config_schema": {
         "required": {
           "data": {
@@ -132,7 +130,6 @@
       "packages": [
         "pandas>=1.5.0"
       ],
-      "python_version": ">=3.8",
       "config_schema": {
         "required": {
           "data": {

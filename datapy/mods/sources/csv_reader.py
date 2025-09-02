@@ -23,8 +23,7 @@ METADATA = ModMetadata(
     input_ports=[],
     output_ports=["data"],
     globals=["row_count", "column_count", "file_size"],
-    packages=["pandas>=1.5.0"],
-    python_version=">=3.8"
+    packages=["pandas>=1.5.0"]
 )
 
 # Parameter schema
