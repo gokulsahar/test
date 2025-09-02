@@ -1,0 +1,27 @@
+{
+  "data": {
+    "input_path": "demo_data",
+    "output_path": "demo_output"
+  },
+  "business_rules": {
+    "min_age": 18,
+    "adult_age": 21,
+    "senior_age": 65,
+    "min_balance": 10000,
+    "vip_balance": 1000000
+  },
+  "filters": {
+    "target_cities": ["New York", "Chicago", "Los Angeles", "Houston", "Phoenix"],
+    "account_types": ["Standard", "Premium", "VIP"]
+  },
+  "anomaly_detection": {
+    "method": "iqr",
+    "threshold": 2.0,
+    "columns": ["account_balance"]
+  },
+  "reporting": {
+    "title": "Daily Client Analysis Report",
+    "sheet_name": "Client_Data",
+    "include_summary": true
+  }
+}

@@ -1,0 +1,31 @@
+client_id,name,age,city,account_balance,email,phone,account_type
+C001,John Smith,34,New York,125000.50,john.smith@email.com,555-0123,Premium
+C002,Sarah Johnson,28,Chicago,45000.00,sarah.j@email.com,555-0124,Standard
+C003,Michael Brown,45,Los Angeles,89000.25,m.brown@email.com,555-0125,Premium
+C004,Emily Davis,31,Houston,67000.00,emily.davis@email.com,555-0126,Standard
+C005,Robert Wilson,52,Phoenix,156000.75,r.wilson@email.com,555-0127,Premium
+C006,Jessica Miller,29,Philadelphia,38000.00,jessica.m@email.com,555-0128,Standard
+C007,David Garcia,41,San Antonio,78000.50,d.garcia@email.com,555-0129,Standard
+C008,Lisa Rodriguez,36,San Diego,92000.00,lisa.rod@email.com,555-0130,Premium
+C009,Christopher Lee,27,Dallas,52000.25,chris.lee@email.com,555-0131,Standard
+C010,Amanda Taylor,33,San Jose,74000.00,amanda.t@email.com,555-0132,Standard
+C011,James Anderson,48,Austin,145000.00,j.anderson@email.com,555-0133,Premium
+C012,Michelle Thomas,30,Jacksonville,41000.50,michelle.t@email.com,555-0134,Standard
+C013,William Jackson,39,Fort Worth,85000.75,w.jackson@email.com,555-0135,Standard
+C014,Jennifer White,32,Columbus,59000.00,jennifer.w@email.com,555-0136,Standard
+C015,Daniel Harris,44,Charlotte,112000.25,d.harris@email.com,555-0137,Premium
+C016,Ashley Martin,26,San Francisco,67500.00,ashley.m@email.com,555-0138,Standard
+C017,Matthew Thompson,37,Indianapolis,73000.50,m.thompson@email.com,555-0139,Standard
+C018,Stephanie Garcia,35,Seattle,81000.00,stephanie.g@email.com,555-0140,Standard
+C019,Andrew Martinez,42,Denver,96000.75,a.martinez@email.com,555-0141,Premium
+C020,Rebecca Robinson,29,Washington,54000.25,rebecca.r@email.com,555-0142,Standard
+C021,Joshua Clark,46,Boston,134000.00,joshua.c@email.com,555-0143,Premium
+C022,Megan Lewis,31,El Paso,47000.50,megan.l@email.com,555-0144,Standard
+C023,Anthony Walker,38,Detroit,71000.75,anthony.w@email.com,555-0145,Standard
+C024,Kimberly Hall,33,Nashville,63000.00,kimberly.h@email.com,555-0146,Standard
+C025,Mark Young,50,Portland,987654.32,mark.young@email.com,555-0147,Premium
+C026,Laura King,22,Oklahoma City,15000.00,laura.k@email.com,555-0148,Basic
+C027,Steven Wright,65,Las Vegas,2500000.00,steven.w@email.com,555-0149,VIP
+C028,Nicole Lopez,19,Louisville,8000.50,nicole.l@email.com,555-0150,Basic
+C029,Kevin Hill,71,Baltimore,3750000.75,kevin.h@email.com,555-0151,VIP
+C030,Amy Green,17,Milwaukee,25000.00,amy.g@email.com,555-0152,Basic

@@ -1,0 +1,8 @@
+{
+  "account_balance": {
+    "method": "IQR",
+    "lower_bound": -58500.0,
+    "upper_bound": 219000.625,
+    "threshold": 2.0
+  }
+}

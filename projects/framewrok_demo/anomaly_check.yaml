@@ -1,0 +1,10 @@
+mods:
+  detect_anomalies:
+    _type: anomaly_detector
+    data: "${data.input_path}/clients.csv"      
+    numeric_columns: "${anomaly_detection.columns}"
+    method: "${anomaly_detection.method}"       
+    threshold: "${anomaly_detection.threshold}"
+    output_anomalies_only: false
+    output_dir: "demo_output"
+    file_prefix: "clients"

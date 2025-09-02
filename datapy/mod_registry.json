@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2025-08-28T13:25:34.074922"
+    "last_updated": "2025-09-02T07:29:58.446094"
   },
   "mods": {
     "csv_reader": {
@@ -175,6 +175,115 @@
         }
       },
       "registered_at": "2025-08-28T13:25:34.074916"
+    },
+    "anomaly_detector": {
+      "module_path": "datapy.mods.demo.mods.anomaly_detector",
+      "type": "anomaly_detector",
+      "version": "1.0.0",
+      "description": "Generic anomaly detection on numeric data using statistical methods",
+      "category": "transformer",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [
+        "anomalies",
+        "clean_data"
+      ],
+      "globals": [
+        "total_anomalies",
+        "anomaly_rate",
+        "columns_analyzed"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "numpy>=1.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Input DataFrame to analyze for anomalies"
+          }
+        },
+        "optional": {
+          "numeric_columns": {
+            "type": "list",
+            "default": null,
+            "description": "List of numeric columns to analyze (None = auto-detect)"
+          },
+          "method": {
+            "type": "str",
+            "default": "iqr",
+            "description": "Detection method: 'iqr' or 'zscore'"
+          },
+          "threshold": {
+            "type": "float",
+            "default": 1.5,
+            "description": "Threshold for outlier detection (IQR multiplier or Z-score)"
+          },
+          "output_anomalies_only": {
+            "type": "bool",
+            "default": false,
+            "description": "If True, output only anomaly records"
+          }
+        }
+      },
+      "registered_at": "2025-09-02T07:29:44.665746"
+    },
+    "excel_writer": {
+      "module_path": "datapy.mods.demo.mods.excel_writer",
+      "type": "excel_writer",
+      "version": "1.0.0",
+      "description": "Writes pandas DataFrame to Excel files with basic formatting",
+      "category": "sink",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [],
+      "globals": [
+        "output_path",
+        "rows_written",
+        "file_size"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "openpyxl>=3.0.0"
+      ],
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Input DataFrame to write to Excel"
+          },
+          "output_path": {
+            "type": "str",
+            "description": "Path where Excel file will be written"
+          }
+        },
+        "optional": {
+          "sheet_name": {
+            "type": "str",
+            "default": "Data",
+            "description": "Name of the Excel sheet"
+          },
+          "include_index": {
+            "type": "bool",
+            "default": false,
+            "description": "Include DataFrame index in output"
+          },
+          "create_directories": {
+            "type": "bool",
+            "default": true,
+            "description": "Create parent directories if they don't exist"
+          },
+          "add_title": {
+            "type": "str",
+            "default": null,
+            "description": "Add title row at the top (optional)"
+          }
+        }
+      },
+      "registered_at": "2025-09-02T07:29:58.446087"
     }
   }
 }

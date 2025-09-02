@@ -1,1 +1,3 @@
 python -m datapy run-mod read_customers --params projects\demo_project\filter_job\filter_pipeline.yaml --context projects\demo_project\filter_job\context.json
+
+datapy run-mod detect_anomalies --params anomaly_check.yaml --context bank_config.json
