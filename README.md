@@ -12,7 +12,7 @@ DataPy provides a modular architecture for building ETL pipelines through reusab
 - **Dual Execution Models**: Both CLI and Python SDK interfaces
 - **Parameter Resolution Chain**: Project defaults, mod defaults, and job-specific parameters
 - **Context Variable Substitution**: Dynamic parameter replacement using JSON context files
-- **Structured JSON Logging**: Comprehensive execution tracking and debugging
+- **Structured Tab-Delimited Logging**: Comprehensive execution tracking and debugging
 - **Standardized Result Format**: Consistent success/warning/error handling across all components
 - **Extensible Architecture**: Easy creation of custom mods with metadata validation
 
@@ -36,6 +36,196 @@ pip install -e .
 ```bash
 pip install -r requirements.txt
 ```
+
+## How to Use This Framework
+
+DataPy can be used in several ways depending on your needs:
+
+### 1. Command Line Interface (CLI)
+Best for: Shell scripts, scheduled jobs, CI/CD pipelines
+
+```bash
+# Execute individual mods from YAML configuration
+datapy run-mod extract_customers --params job_config.yaml --context prod_context.json
+
+# List available mods
+datapy list-registry
+
+# Register custom mods
+datapy register-mod my_package.mods.custom_processor
+```
+
+### 2. Python SDK
+Best for: Complex workflows, custom applications, interactive notebooks
+
+```python
+from datapy.mod_manager.sdk import run_mod, set_context, set_log_level
+
+# Configure framework
+set_log_level("INFO")
+set_context("environments/production.json")
+
+# Execute mods programmatically
+result = run_mod("csv_reader", {
+    "file_path": "data/customers.csv",
+    "encoding": "utf-8"
+}, "extract_customers")
+
+# Chain mods together
+if result['status'] == 'success':
+    customer_data = result['artifacts']['data']
+    
+    filter_result = run_mod("csv_filter", {
+        "data": customer_data,
+        "filter_conditions": {"age": {"gte": 25}}
+    }, "filter_adults")
+```
+
+### 3. Standalone Python Scripts
+Best for: Project-specific pipelines, custom data processing
+
+```python
+#!/usr/bin/env python3
+# Complete ETL pipeline script
+from datapy.mod_manager.sdk import run_mod, set_context
+
+def main():
+    # Setup
+    set_context("config/production.json")
+    
+    # Execute pipeline
+    extract_result = run_mod("csv_reader", {"file_path": "${data.input_path}/customers.csv"})
+    filter_result = run_mod("csv_filter", {"data": extract_result['artifacts']['data']})
+    write_result = run_mod("csv_writer", {"data": filter_result['artifacts']['filtered_data']})
+    
+    print(f"Pipeline completed: {write_result['status']}")
+
+if __name__ == "__main__":
+    main()
+```
+
+### 4. YAML-Driven Workflows
+Best for: Configuration-driven pipelines, environment promotion
+
+```yaml
+# job_config.yaml
+mods:
+  extract_customers:
+    _type: csv_reader
+    file_path: "${env.data_path}/customers.csv"
+    encoding: "utf-8"
+  
+  filter_adults:
+    _type: csv_filter
+    filter_conditions:
+      age: {gte: 25}
+    keep_columns: ["name", "age", "city"]
+```
+
+## Generic Output Format
+
+All DataPy mods return a standardized result format regardless of execution method (CLI or SDK). This ensures consistent error handling and result processing across the framework.
+
+### Success Result Schema
+
+```json
+{
+  "status": "success",
+  "execution_time": 1.234,
+  "exit_code": 0,
+  "metrics": {
+    "rows_processed": 1000,
+    "file_size_bytes": 52341,
+    "processing_rate": 0.95
+  },
+  "artifacts": {
+    "data": "<DataFrame>",
+    "output_path": "/path/to/output.csv"
+  },
+  "globals": {
+    "row_count": 1000,
+    "last_processed": "2024-08-28"
+  },
+  "warnings": [],
+  "errors": [],
+  "logs": {
+    "run_id": "csv_reader_20240828_143917_abc123",
+    "mod_type": "csv_reader",
+    "mod_name": "extract_customers"
+  }
+}
+```
+
+### Warning Result Schema
+
+```json
+{
+  "status": "warning",
+  "execution_time": 2.156,
+  "exit_code": 10,
+  "metrics": {
+    "rows_processed": 950,
+    "rows_skipped": 50
+  },
+  "artifacts": {
+    "data": "<DataFrame>"
+  },
+  "globals": {
+    "row_count": 950
+  },
+  "warnings": [
+    {
+      "message": "Found 50 rows with missing values",
+      "warning_code": 10,
+      "timestamp": 1640995200.123
+    }
+  ],
+  "errors": [],
+  "logs": {
+    "run_id": "csv_filter_20240828_143917_def456",
+    "mod_type": "csv_filter", 
+    "mod_name": "filter_customers"
+  }
+}
+```
+
+### Error Result Schema
+
+```json
+{
+  "status": "error",
+  "execution_time": 0.045,
+  "exit_code": 30,
+  "metrics": {},
+  "artifacts": {},
+  "globals": {},
+  "warnings": [],
+  "errors": [
+    {
+      "message": "File not found: /missing/data.csv",
+      "error_code": 30,
+      "timestamp": 1640995200.456
+    }
+  ],
+  "logs": {
+    "run_id": "csv_reader_20240828_143917_ghi789",
+    "mod_type": "csv_reader",
+    "mod_name": "extract_missing"
+  }
+}
+```
+
+### Field Descriptions
+
+- **status**: Result status (`"success"`, `"warning"`, `"error"`)
+- **execution_time**: Total execution time in seconds (float)
+- **exit_code**: Process exit code (0=success, 10=warning, 20=validation error, 30=runtime error)
+- **metrics**: Mod-specific performance and processing metrics
+- **artifacts**: Output data and objects (DataFrames, file paths, processed results)
+- **globals**: Shared variables for cross-mod communication
+- **warnings**: Non-fatal issues with detailed messages and timestamps
+- **errors**: Fatal errors with error codes and timestamps
+- **logs**: Execution metadata including unique run ID and mod identification
 
 ## Quick Start
 
@@ -230,6 +420,45 @@ mods:
     _type: csv_reader
     file_path: "${env.data_path}/customers.csv"
     connection_string: "postgresql://${database.host}:${database.port}/mydb"
+```
+
+## Logging
+
+The framework uses structured tab-delimited logging to stderr for easy parsing and analysis:
+
+### Log Format
+
+```
+TIMESTAMP \t LEVEL \t LOGGER \t MOD_TYPE \t MOD_NAME \t MESSAGE \t EXTRA_FIELDS
+```
+
+### Example Log Output
+
+```
+2024-08-28T14:39:17.011215Z	INFO	datapy.mod_manager.sdk	csv_reader	extract_customers	Starting mod execution	{"param_count": 3}
+2024-08-28T14:39:17.245891Z	INFO	datapy.mods.sources.csv_reader	csv_reader	extract_customers	CSV read successful	{"rows": 1000, "columns": 5, "file_size": 52341}
+2024-08-28T14:39:17.246123Z	WARNING	datapy.mods.sources.csv_reader	csv_reader	extract_customers	Found empty rows in data	{"empty_row_count": 5}
+```
+
+### Log Fields
+
+- **TIMESTAMP**: ISO 8601 timestamp with Z suffix
+- **LEVEL**: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- **LOGGER**: Python logger name (typically module path)
+- **MOD_TYPE**: Type of mod being executed (e.g., "csv_reader")
+- **MOD_NAME**: Instance name of the mod (e.g., "extract_customers")
+- **MESSAGE**: Human-readable log message
+- **EXTRA_FIELDS**: JSON object with additional context (file paths, metrics, etc.)
+
+### Log Levels
+
+```bash
+# Set via CLI
+datapy run-mod extract_data --params config.yaml --log-level DEBUG
+
+# Set via SDK  
+from datapy.mod_manager.sdk import set_log_level
+set_log_level("DEBUG")
 ```
 
 ## Creating Custom Mods
@@ -438,32 +667,6 @@ if result['status'] == 'error':
     for error in result['errors']:
         print(f"Error: {error['message']}")
         print(f"Code: {error['error_code']}")
-```
-
-## Logging
-
-The framework uses structured JSON logging to stderr:
-
-```json
-{
-  "timestamp": "2024-08-27T22:39:17.011215Z",
-  "level": "INFO", 
-  "logger": "datapy.mod_manager.sdk",
-  "message": "Starting mod execution: csv_reader_20240827_143917_123",
-  "mod_type": "csv_reader",
-  "mod_name": "csv_reader_20240827_143917_123"
-}
-```
-
-### Log Levels
-
-```bash
-# Set via CLI
-datapy run-mod extract_data --params config.yaml --log-level DEBUG
-
-# Set via SDK  
-from datapy.mod_manager.sdk import set_log_level
-set_log_level("DEBUG")
 ```
 
 ## Best Practices
