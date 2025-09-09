@@ -202,11 +202,8 @@ def _substitute_string(text: str, context: Dict[str, Any]) -> Any:
         # Mixed content - substitute and return string
         def replace_var(match):
             var_path = match.group(1)
-            try:
-                value = _get_context_value(var_path, context)
-                return str(value)
-            except ValueError as e:
-                raise e
+            value = _get_context_value(var_path, context)
+            return str(value)
         
         return _substitution_pattern.sub(replace_var, text)
 

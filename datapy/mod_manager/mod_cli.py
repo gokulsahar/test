@@ -79,99 +79,20 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
     log_level = ctx.obj.get('log_level')
     
     try:
-        # Validate mod_name
-        if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
-            click.echo("Error: mod_name must be a non-empty string", err=True)
-            sys.exit(VALIDATION_ERROR)
+        # Validate and setup
+        validated_mod_name = _validate_and_prepare_mod_name(mod_name)
+        _setup_logging_and_context(log_level, context)
         
-        mod_name = mod_name.strip()
-        if not mod_name.isidentifier():
-            click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
-            sys.exit(VALIDATION_ERROR)
+        # Load configuration and execute
+        config = load_job_config(params)
+        mod_type, mod_params = _parse_mod_config(config, validated_mod_name)
         
-        # Setup logging from CLI flag only (no YAML globals)
-        try:
-            if log_level:
-                set_log_level(log_level)
-            else:
-                # Setup default console logging
-                setup_console_logging(DEFAULT_LOG_CONFIG)
-        except Exception as e:
-            click.echo(f"Error setting up logging: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
+        _output_execution_info(validated_mod_name, mod_type, params)
         
-        # Setup context if provided
-        if context:
-            try:
-                set_context(context)
-                click.echo(f"Using context file: {context}")
-            except Exception as e:
-                click.echo(f"Error setting context file {context}: {e}", err=True)
-                sys.exit(VALIDATION_ERROR)
+        # Execute and handle results
+        result = run_mod(mod_type, mod_params, validated_mod_name)
+        _output_and_exit_with_result(result, exit_on_error)
         
-        # Load and validate YAML configuration
-        try:
-            config = load_job_config(params)
-            mod_type, mod_params = _parse_mod_config(config, mod_name)
-            
-        except Exception as e:
-            click.echo(f"Error parsing YAML file {params}: {e}", err=True)
-            sys.exit(VALIDATION_ERROR)
-        
-        # Output execution info
-        click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
-        click.echo(f"Using parameters from: {params}")
-        
-        # Execute the mod using registry-based SDK
-        try:
-            result = run_mod(mod_type, mod_params, mod_name)
-            
-        except Exception as e:
-            click.echo(f"Error executing mod: {e}", err=True)
-            sys.exit(RUNTIME_ERROR)
-        
-        # Create CLI-friendly summary (exclude complex objects)
-        cli_result = {
-            "status": result['status'],
-            "execution_time": result['execution_time'],
-            "exit_code": result['exit_code'],
-            "metrics": result['metrics'],
-            "warnings": result['warnings'],
-            "errors": result['errors'],
-            "logs": result['logs']
-        }
-        
-        # Add artifacts (show file paths, URIs, and simple values)
-        if result['artifacts']:
-            cli_result["artifacts"] = {}
-            for key, value in result['artifacts'].items():
-                if isinstance(value, str):
-                    # File paths, URIs, simple strings
-                    cli_result["artifacts"][key] = value
-                elif isinstance(value, (int, float, bool, list, dict)):
-                    # Simple data types
-                    cli_result["artifacts"][key] = value
-                else:
-                    # Complex objects (DataFrame, etc.) - show type placeholder
-                    cli_result["artifacts"][key] = f"<{type(value).__name__}>"
-        
-        # Add globals (usually just simple values)
-        cli_result["globals"] = result['globals']
-        
-        # Output results wrapped in result:{}
-        wrapped_result = {"result": cli_result}
-        click.echo(json.dumps(wrapped_result, indent=2))
-        
-        # Handle exit code
-        exit_code = result.get('exit_code', RUNTIME_ERROR)
-        if result['status'] == 'error' and exit_on_error:
-            click.echo(f"Mod failed with exit code: {exit_code}", err=True)
-            sys.exit(exit_code)
-        elif result['status'] == 'warning':
-            sys.exit(SUCCESS_WITH_WARNINGS)
-        else:
-            sys.exit(SUCCESS)
-            
     except SystemExit:
         raise  # Re-raise sys.exit calls
     except Exception as e:
@@ -179,6 +100,100 @@ def run_mod_command(ctx: click.Context, mod_name: str, params: str, context: Opt
         import traceback
         click.echo(traceback.format_exc(), err=True)
         sys.exit(RUNTIME_ERROR)
+
+def _validate_and_prepare_mod_name(mod_name: str) -> str:
+    """Validate and prepare mod name."""
+    if not mod_name or not isinstance(mod_name, str) or not mod_name.strip():
+        click.echo("Error: mod_name must be a non-empty string", err=True)
+        sys.exit(VALIDATION_ERROR)
+    
+    mod_name = mod_name.strip()
+    if not mod_name.isidentifier():
+        click.echo(f"Error: mod_name '{mod_name}' must be a valid identifier", err=True)
+        sys.exit(VALIDATION_ERROR)
+    
+    return mod_name
+
+def _setup_logging_and_context(log_level: Optional[str], context: Optional[str]) -> None:
+    """Setup logging and context configuration."""
+    # Setup logging from CLI flag only (no YAML globals)
+    try:
+        if log_level:
+            set_log_level(log_level)
+        else:
+            # Setup default console logging
+            setup_console_logging(DEFAULT_LOG_CONFIG)
+    except Exception as e:
+        click.echo(f"Error setting up logging: {e}", err=True)
+        sys.exit(RUNTIME_ERROR)
+    
+    # Setup context if provided
+    if context:
+        try:
+            set_context(context)
+            click.echo(f"Using context file: {context}")
+        except Exception as e:
+            click.echo(f"Error setting context file {context}: {e}", err=True)
+            sys.exit(VALIDATION_ERROR)
+
+def _output_execution_info(mod_name: str, mod_type: str, params: str) -> None:
+    """Output execution information."""
+    click.echo(f"Executing mod: {mod_name} (type: {mod_type})")
+    click.echo(f"Using parameters from: {params}")
+
+def _output_and_exit_with_result(result: Dict[str, Any], exit_on_error: bool) -> None:
+    """Output result and exit with appropriate code."""
+    # Create CLI-friendly summary
+    cli_result = _create_cli_result_summary(result)
+    
+    # Output results wrapped in result:{}
+    wrapped_result = {"result": cli_result}
+    click.echo(json.dumps(wrapped_result, indent=2))
+    
+    # Handle exit code
+    _handle_exit_code(result, exit_on_error)
+
+def _create_cli_result_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Create CLI-friendly result summary."""
+    cli_result = {
+        "status": result['status'],
+        "execution_time": result['execution_time'],
+        "exit_code": result['exit_code'],
+        "metrics": result['metrics'],
+        "warnings": result['warnings'],
+        "errors": result['errors'],
+        "logs": result['logs']
+    }
+    
+    # Add artifacts (show file paths, URIs, and simple values)
+    if result['artifacts']:
+        cli_result["artifacts"] = {}
+        for key, value in result['artifacts'].items():
+            if isinstance(value, str):
+                # File paths, URIs, simple strings
+                cli_result["artifacts"][key] = value
+            elif isinstance(value, (int, float, bool, list, dict)):
+                # Simple data types
+                cli_result["artifacts"][key] = value
+            else:
+                # Complex objects (DataFrame, etc.) - show type placeholder
+                cli_result["artifacts"][key] = f"<{type(value).__name__}>"
+    
+    # Add globals (usually just simple values)
+    cli_result["globals"] = result['globals']
+    
+    return cli_result
+
+def _handle_exit_code(result: Dict[str, Any], exit_on_error: bool) -> None:
+    """Handle exit code based on result status."""
+    exit_code = result.get('exit_code', RUNTIME_ERROR)
+    if result['status'] == 'error' and exit_on_error:
+        click.echo(f"Mod failed with exit code: {exit_code}", err=True)
+        sys.exit(exit_code)
+    elif result['status'] == 'warning':
+        sys.exit(SUCCESS_WITH_WARNINGS)
+    else:
+        sys.exit(SUCCESS)
 
 
 # Export commands for main CLI

@@ -129,32 +129,52 @@ class ConfigSchema(BaseModel):
         valid_types = {'str', 'int', 'float', 'bool', 'list', 'dict', 'object'}
         
         for param_name, param_def in v.items():
-            if not isinstance(param_def, dict):
-                raise ValueError(f"Parameter definition for '{param_name}' must be a dictionary")
-            
-            if 'type' not in param_def:
-                raise ValueError(f"Parameter '{param_name}' missing required 'type' field")
-            
-            if 'description' not in param_def:
-                raise ValueError(f"Parameter '{param_name}' missing required 'description' field")
-            
-            # Validate type field
-            param_type = param_def['type']
-            if not isinstance(param_type, str) or param_type not in valid_types:
-                raise ValueError(f"Parameter '{param_name}' has invalid type '{param_type}'. Valid types: {valid_types}")
-            
-            # Validate description
-            description = param_def['description']
-            if not isinstance(description, str) or not description.strip():
-                raise ValueError(f"Parameter '{param_name}' description must be a non-empty string")
-            
-            # Validate default value type matches declared type (if present)
-            if 'default' in param_def:
-                default_val = param_def['default']
-                if not cls._validate_default_type(default_val, param_type):
-                    raise ValueError(f"Parameter '{param_name}' default value type doesn't match declared type '{param_type}'")
+            cls._validate_param_definition(param_name, param_def, valid_types)
         
         return v
+
+    @staticmethod
+    def _validate_param_definition(param_name: str, param_def: Dict[str, Any], valid_types: set) -> None:
+        """Validate a single parameter definition."""
+        if not isinstance(param_def, dict):
+            raise ValueError(f"Parameter definition for '{param_name}' must be a dictionary")
+        
+        ConfigSchema._validate_required_fields(param_name, param_def)
+        ConfigSchema._validate_param_type(param_name, param_def, valid_types)
+        ConfigSchema._validate_description(param_name, param_def)
+        ConfigSchema._validate_default_if_present(param_name, param_def)
+
+    @staticmethod
+    def _validate_required_fields(param_name: str, param_def: Dict[str, Any]) -> None:
+        """Validate required fields are present."""
+        if 'type' not in param_def:
+            raise ValueError(f"Parameter '{param_name}' missing required 'type' field")
+        
+        if 'description' not in param_def:
+            raise ValueError(f"Parameter '{param_name}' missing required 'description' field")
+
+    @staticmethod
+    def _validate_param_type(param_name: str, param_def: Dict[str, Any], valid_types: set) -> None:
+        """Validate parameter type field."""
+        param_type = param_def['type']
+        if not isinstance(param_type, str) or param_type not in valid_types:
+            raise ValueError(f"Parameter '{param_name}' has invalid type '{param_type}'. Valid types: {valid_types}")
+
+    @staticmethod
+    def _validate_description(param_name: str, param_def: Dict[str, Any]) -> None:
+        """Validate parameter description field."""
+        description = param_def['description']
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(f"Parameter '{param_name}' description must be a non-empty string")
+
+    @staticmethod
+    def _validate_default_if_present(param_name: str, param_def: Dict[str, Any]) -> None:
+        """Validate default value type if present."""
+        if 'default' in param_def:
+            default_val = param_def['default']
+            param_type = param_def['type']
+            if not ConfigSchema._validate_default_type(default_val, param_type):
+                raise ValueError(f"Parameter '{param_name}' default value type doesn't match declared type '{param_type}'")
     
     @staticmethod
     def _validate_default_type(value: Any, declared_type: str) -> bool:

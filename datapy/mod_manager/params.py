@@ -52,43 +52,67 @@ class ProjectConfig:
         Raises:
             RuntimeError: If config file exists but cannot be loaded
         """
+        config_path = self._find_config_file()
+        
+        if config_path:
+            self._load_config_file(config_path)
+        else:
+            logger.info("No project configuration found, using defaults only")
+            self.config_data = {}
+
+    def _find_config_file(self) -> Optional[Path]:
+        """
+        Find project configuration file in standard locations.
+        
+        Returns:
+            Path to config file if found, None otherwise
+        """
         # Primary search: parent directory (typical case)
         parent_config_path = self.search_path.parent / "project_defaults.yaml"
         
         # Fallback search: current directory
         current_config_path = self.search_path / "project_defaults.yaml"
         
-        config_path = None
         if parent_config_path.exists() and parent_config_path.is_file():
-            config_path = parent_config_path
+            return parent_config_path
         elif current_config_path.exists() and current_config_path.is_file():
-            config_path = current_config_path
+            return current_config_path
         
-        if config_path:
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    self.config_data = yaml.safe_load(f) or {}
-                    
-                if not isinstance(self.config_data, dict):
-                    raise RuntimeError(f"Project config {config_path} must contain a YAML dictionary")
+        return None
+
+    def _load_config_file(self, config_path: Path) -> None:
+        """
+        Load and validate project configuration file.
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Raises:
+            RuntimeError: If config file cannot be loaded or is invalid
+        """
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.config_data = yaml.safe_load(f) or {}
                 
-                self.project_path = config_path.parent
-                
-                # Auto-generate project name from folder if not specified
-                if 'project_name' not in self.config_data:
-                    self.config_data['project_name'] = self.project_path.name
-                
-                logger.info(f"Found project config: {config_path}")
-                
-            except yaml.YAMLError as e:
-                raise RuntimeError(f"Invalid YAML in project config {config_path}: {e}")
-            except PermissionError as e:
-                raise RuntimeError(f"Cannot read project config {config_path}: {e}")
-            except Exception as e:
-                raise RuntimeError(f"Failed to load project config {config_path}: {e}")
-        else:
-            logger.info("No project configuration found, using defaults only")
-            self.config_data = {}
+            if not isinstance(self.config_data, dict):
+                raise RuntimeError(f"Project config {config_path} must contain a YAML dictionary")
+            
+            self.project_path = config_path.parent
+            self._set_default_project_name()
+            
+            logger.info(f"Found project config: {config_path}")
+            
+        except yaml.YAMLError as e:
+            raise RuntimeError(f"Invalid YAML in project config {config_path}: {e}")
+        except PermissionError as e:
+            raise RuntimeError(f"Cannot read project config {config_path}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load project config {config_path}: {e}")
+
+    def _set_default_project_name(self) -> None:
+        """Set default project name if not specified in config."""
+        if 'project_name' not in self.config_data:
+            self.config_data['project_name'] = self.project_path.name
     
     def get_mod_defaults(self, mod_name: str) -> Dict[str, Any]:
         """
@@ -154,8 +178,6 @@ class ParameterResolver:
             project_config: Project configuration instance
         """
         self.project_config = project_config or get_project_config()
-        # Note: Removed thread safety - ETL processes are single-threaded per execution
-        # TODO: Add distributed parameter resolution for future orchestrator
     
     def resolve_mod_params(
     self,

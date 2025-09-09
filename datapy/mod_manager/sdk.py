@@ -63,7 +63,7 @@ def _auto_generate_mod_name(mod_type: str) -> str:
     return f"{mod_type}_{timestamp}"
 
 
-def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str) -> Dict[str, Any]:
+def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Resolve parameters using project defaults and job parameters.
     
@@ -72,7 +72,6 @@ def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any], mod_name: str
     Args:
         mod_type: Type of mod being executed
         params: Raw parameters from caller
-        mod_name: Name of mod instance
         
     Returns:
         Resolved parameters dictionary
@@ -232,7 +231,7 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
         
         # 2. Resolve parameters (project defaults + job params only)
         try:
-            resolved_params = _resolve_mod_parameters(mod_type, params, mod_name)
+            resolved_params = _resolve_mod_parameters(mod_type, params)
             logger.debug(f"Parameters resolved", extra={"param_count": len(resolved_params)})
         except RuntimeError as e:
             return validation_error(mod_name, str(e))

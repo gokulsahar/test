@@ -127,14 +127,14 @@ class ModRegistry:
             
             logger.info("Registry saved successfully")
             
-        except Exception as e:
+        except (OSError, PermissionError, json.JSONEncodeError) as e:
             # Clean up temp file if it exists
             temp_file = self.registry_path + '.tmp'
             if Path(temp_file).exists():
                 try:
                     os.unlink(temp_file)
-                except:
-                    pass
+                except (OSError, PermissionError):
+                    logger.warning(f"Failed to cleanup temp file: {temp_file}")
             raise RuntimeError(f"Failed to save registry: {e}")
     
     def get_mod_info(self, mod_type: str) -> Dict[str, Any]:
@@ -320,48 +320,96 @@ class ModRegistry:
         errors = []
         
         for mod_type, mod_info in self.registry_data['mods'].items():
-            try:
-                module_path = mod_info.get('module_path')
-                if not module_path:
-                    errors.append(f"Mod '{mod_type}' missing module_path")
-                    continue
+            mod_errors = self._validate_single_mod(mod_type, mod_info)
+            errors.extend(mod_errors)
+        
+        return errors
+
+    def _validate_single_mod(self, mod_type: str, mod_info: Dict[str, Any]) -> List[str]:
+        """
+        Validate a single mod entry.
+        
+        Args:
+            mod_type: Type identifier of the mod
+            mod_info: Mod information dictionary
+            
+        Returns:
+            List of validation errors for this mod
+        """
+        errors = []
+        
+        try:
+            module_path = mod_info.get('module_path')
+            if not module_path:
+                return [f"Mod '{mod_type}' missing module_path"]
+            
+            # Try to import and validate module structure
+            mod_module = importlib.import_module(module_path)
+            structure_errors = self._validate_mod_structure(mod_type, mod_module)
+            errors.extend(structure_errors)
+            
+            # Validate metadata if structure is valid
+            if not structure_errors:
+                metadata_errors = self._validate_mod_metadata(mod_type, mod_module)
+                errors.extend(metadata_errors)
                 
-                # Try to import mod
-                mod_module = importlib.import_module(module_path)
+        except ImportError as e:
+            errors.append(f"Mod '{mod_type}' import failed: {e}")
+        except Exception as e:
+            errors.append(f"Mod '{mod_type}' validation failed: {e}")
+        
+        return errors
+
+    def _validate_mod_structure(self, mod_type: str, mod_module) -> List[str]:
+        """
+        Validate mod has required structural components.
+        
+        Args:
+            mod_type: Type identifier of the mod
+            mod_module: Imported module object
+            
+        Returns:
+            List of structural validation errors
+        """
+        errors = []
+        
+        if not hasattr(mod_module, 'run'):
+            errors.append(f"Mod '{mod_type}' missing run() function")
+        elif not callable(mod_module.run):
+            errors.append(f"Mod '{mod_type}' run is not callable")
+        
+        if not hasattr(mod_module, 'METADATA'):
+            errors.append(f"Mod '{mod_type}' missing METADATA")
+        
+        if not hasattr(mod_module, 'CONFIG_SCHEMA'):
+            errors.append(f"Mod '{mod_type}' missing CONFIG_SCHEMA")
+        
+        return errors
+
+    def _validate_mod_metadata(self, mod_type: str, mod_module) -> List[str]:
+        """
+        Validate mod metadata types and structure.
+        
+        Args:
+            mod_type: Type identifier of the mod
+            mod_module: Imported module object
+            
+        Returns:
+            List of metadata validation errors
+        """
+        errors = []
+        
+        try:
+            from .base import ModMetadata, ConfigSchema
+            
+            if not isinstance(mod_module.METADATA, ModMetadata):
+                errors.append(f"Mod '{mod_type}' METADATA is not ModMetadata instance")
+            
+            if not isinstance(mod_module.CONFIG_SCHEMA, ConfigSchema):
+                errors.append(f"Mod '{mod_type}' CONFIG_SCHEMA is not ConfigSchema instance")
                 
-                # Check for required components
-                if not hasattr(mod_module, 'run'):
-                    errors.append(f"Mod '{mod_type}' missing run() function")
-                    continue
-                
-                if not callable(mod_module.run):
-                    errors.append(f"Mod '{mod_type}' run is not callable")
-                
-                # Check for metadata components
-                if not hasattr(mod_module, 'METADATA'):
-                    errors.append(f"Mod '{mod_type}' missing METADATA")
-                
-                if not hasattr(mod_module, 'CONFIG_SCHEMA'):
-                    errors.append(f"Mod '{mod_type}' missing CONFIG_SCHEMA")
-                
-                # Validate metadata types if present
-                if hasattr(mod_module, 'METADATA') and hasattr(mod_module, 'CONFIG_SCHEMA'):
-                    try:
-                        from .base import ModMetadata, ConfigSchema
-                        
-                        if not isinstance(mod_module.METADATA, ModMetadata):
-                            errors.append(f"Mod '{mod_type}' METADATA is not ModMetadata instance")
-                        
-                        if not isinstance(mod_module.CONFIG_SCHEMA, ConfigSchema):
-                            errors.append(f"Mod '{mod_type}' CONFIG_SCHEMA is not ConfigSchema instance")
-                            
-                    except Exception as e:
-                        errors.append(f"Mod '{mod_type}' metadata validation failed: {e}")
-                
-            except ImportError as e:
-                errors.append(f"Mod '{mod_type}' import failed: {e}")
-            except Exception as e:
-                errors.append(f"Mod '{mod_type}' validation failed: {e}")
+        except Exception as e:
+            errors.append(f"Mod '{mod_type}' metadata validation failed: {e}")
         
         return errors
 
