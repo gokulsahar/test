@@ -797,3 +797,15 @@ python -m pytest tests/
 # Run integration tests
 python testScripts/tester.py
 ```
+
+
+## Known Limitations & Future Enhancements
+
+### Resource Management
+DataPy currently does not implement resource management controls. Future versions may include:
+
+- **Timeout Handling**: Automatic termination of long-running mods
+- **Memory Monitoring**: Memory usage limits and peak memory tracking  
+- **Resource Cleanup**: Automatic cleanup of temporary files and resources on failure
+
+For production environments requiring strict resource controls, consider implementing these at the infrastructure level (e.g., containerized deployments with resource limits).
