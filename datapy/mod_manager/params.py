@@ -13,6 +13,9 @@ from .logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# Global project config singleton (matches context.py pattern)
+_global_project_config: Optional['ProjectConfig'] = None
+
 
 class ProjectConfig:
     """
@@ -150,7 +153,7 @@ class ParameterResolver:
         Args:
             project_config: Project configuration instance
         """
-        self.project_config = project_config or ProjectConfig()
+        self.project_config = project_config or get_project_config()
         # Note: Removed thread safety - ETL processes are single-threaded per execution
         # TODO: Add distributed parameter resolution for future orchestrator
     
@@ -197,6 +200,37 @@ class ParameterResolver:
         return resolved
 
 
+def get_project_config(search_path: Optional[str] = None) -> ProjectConfig:
+    """
+    Get global project config instance (singleton for performance).
+    
+    Args:
+        search_path: Starting path for project config discovery
+        
+    Returns:
+        Cached ProjectConfig instance
+        
+    Raises:
+        RuntimeError: If project config discovery fails
+    """
+    global _global_project_config
+    
+    if _global_project_config is None:
+        try:
+            _global_project_config = ProjectConfig(search_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create project config: {e}")
+    
+    return _global_project_config
+
+
+def clear_project_config() -> None:
+    """Clear cached project config (for testing)."""
+    global _global_project_config
+    _global_project_config = None
+    logger.info("Project config cache cleared")
+
+
 def load_job_config(config_path: str) -> Dict[str, Any]:
     """
     Load job configuration from YAML file with comprehensive validation.
@@ -241,19 +275,19 @@ def load_job_config(config_path: str) -> Dict[str, Any]:
 
 def create_resolver(search_path: Optional[str] = None) -> ParameterResolver:
     """
-    Convenience function to create a parameter resolver with project discovery.
+    Convenience function to create a parameter resolver with cached project config.
     
     Args:
         search_path: Starting path for project config discovery
         
     Returns:
-        Configured ParameterResolver instance
+        Configured ParameterResolver instance with cached project config
         
     Raises:
         RuntimeError: If project config discovery fails
     """
     try:
-        project_config = ProjectConfig(search_path)
+        project_config = get_project_config(search_path)
         return ParameterResolver(project_config)
     except Exception as e:
         raise RuntimeError(f"Failed to create parameter resolver: {e}")
