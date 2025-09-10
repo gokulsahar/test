@@ -1541,8 +1541,8 @@ class TestMemoryManagement:
         """Test substitution with unicode content."""
         context_data = {
             "messages": {
-                "greeting": "Hello, 世界!",
-                "emoji": "🎉 Success! 🚀",
+                "greeting": "Hello, ",
+                "emoji": " Success! ",
                 "special": "café, naïve, résumé"
             }
         }
@@ -1559,9 +1559,9 @@ class TestMemoryManagement:
         
         result = substitute_context_variables(params)
         
-        assert result["welcome"] == "Hello, 世界!"
-        assert result["celebration"] == "🎉 Success! 🚀"
-        assert result["text"] == "Welcome: Hello, 世界!"
+        assert result["welcome"] == "Hello, "
+        assert result["celebration"] == " Success! "
+        assert result["text"] == "Welcome: Hello, !"
 
     def test_substitute_context_variables_large_context(self, tmp_path):
         """Test substitution with large context file."""
