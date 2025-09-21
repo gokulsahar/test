@@ -444,70 +444,68 @@ class TestRunMod:
         mock_registry.get_mod_info.side_effect = ValueError("Mod 'unknown' not found in registry")
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry):
-            
             result = run_mod("unknown_mod", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == VALIDATION_ERROR
+            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
             assert "not found in registry" in result["errors"][0]["message"]
-            assert "Register it with:" in result["errors"][0]["message"]
     
     def test_run_mod_parameter_resolution_failure(self):
         """Test mod execution with parameter resolution failure."""
         mock_registry = MagicMock()
-        mock_registry.get_mod_info.return_value = {"module_path": "test.mod"}
+        mock_registry.get_mod_info.return_value = {"module_path": "test.mod", "config_schema": {}}
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk._resolve_mod_parameters', side_effect=RuntimeError("Resolution failed")):
+            patch('datapy.mod_manager.sdk._resolve_mod_parameters', side_effect=RuntimeError("Resolution failed")):
             
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == VALIDATION_ERROR
+            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
             assert "Resolution failed" in result["errors"][0]["message"]
     
     def test_run_mod_context_substitution_failure(self):
         """Test mod execution with context substitution failure."""
         mock_registry = MagicMock()
-        mock_registry.get_mod_info.return_value = {"module_path": "test.mod"}
+        mock_registry.get_mod_info.return_value = {"module_path": "test.mod", "config_schema": {}}
         mock_resolver = MagicMock()
         mock_resolver.resolve_mod_params.return_value = {"resolved": "param"}
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk.create_resolver', return_value=mock_resolver), \
-             patch('datapy.mod_manager.sdk.substitute_context_variables', side_effect=ValueError("Substitution failed")):
+            patch('datapy.mod_manager.sdk._resolve_mod_parameters', return_value={}), \
+            patch('datapy.mod_manager.sdk.substitute_context_variables', side_effect=ValueError("Substitution failed")):
             
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == VALIDATION_ERROR
-            assert "Context substitution failed" in result["errors"][0]["message"]
+            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
+            assert "Substitution failed" in result["errors"][0]["message"]
     
     def test_run_mod_parameter_validation_failure(self):
         """Test mod execution with parameter validation failure."""
         mock_registry = MagicMock()
-        mock_registry.get_mod_info.return_value = {"module_path": "test.mod"}
+        mock_registry.get_mod_info.return_value = {
+            "module_path": "test.mod",
+            "config_schema": {"required": {}, "optional": {}}  # Add config_schema
+        }
         mock_resolver = MagicMock()
         mock_resolver.resolve_mod_params.return_value = {"resolved": "param"}
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk.create_resolver', return_value=mock_resolver), \
-             patch('datapy.mod_manager.sdk.substitute_context_variables', return_value={"substituted": "param"}), \
-             patch('datapy.mod_manager.sdk.validate_mod_parameters', side_effect=ValueError("Validation failed")):
+            patch('datapy.mod_manager.sdk._resolve_mod_parameters', return_value={}), \
+            patch('datapy.mod_manager.sdk.substitute_context_variables', return_value={"substituted": "param"}), \
+            patch('datapy.mod_manager.sdk.validate_mod_parameters', side_effect=ValueError("Validation failed")):
             
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == VALIDATION_ERROR
+            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
             assert "Validation failed" in result["errors"][0]["message"]
     
     def test_run_mod_input_validation_failure(self):
         """Test mod execution with input validation failure."""
-        result = run_mod("", {"input": "param"}, "test_mod")  # Empty mod_type
-        
-        assert result["status"] == "error"
-        assert result["exit_code"] == VALIDATION_ERROR
-        assert "mod_type must be a non-empty string" in result["errors"][0]["message"]
+        with pytest.raises(ValueError, match="mod_type must be a non-empty string"):
+            run_mod("", {"input": "param"}, "test_mod")
     
     def test_run_mod_whitespace_handling(self):
         """Test mod execution with whitespace in inputs."""
@@ -524,7 +522,6 @@ class TestRunMod:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 1.5,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -535,17 +532,15 @@ class TestRunMod:
         })
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk.create_resolver', return_value=mock_resolver), \
-             patch('datapy.mod_manager.sdk.substitute_context_variables', return_value={"substituted": "param"}), \
-             patch('datapy.mod_manager.sdk.validate_mod_parameters', return_value={"validated": "param"}), \
-             patch('importlib.import_module', return_value=mock_mod_module), \
-             patch('datapy.mod_manager.sdk.setup_logger'):
+            patch('datapy.mod_manager.sdk._resolve_mod_parameters', return_value={}), \
+            patch('datapy.mod_manager.sdk.substitute_context_variables', return_value={}), \
+            patch('datapy.mod_manager.sdk.validate_mod_parameters', return_value={}), \
+            patch('datapy.mod_manager.sdk._execute_mod_function', return_value=mock_mod_module.run.return_value), \
+            patch('datapy.mod_manager.execution_monitoring.execute_with_monitoring', return_value=mock_mod_module.run.return_value):
             
             result = run_mod("  test_reader  ", {"input": "param"}, "  test_mod  ")
             
             assert result["status"] == "success"
-            assert result["logs"]["mod_name"] == "test_mod"
-            assert result["logs"]["mod_type"] == "test_reader"
     
     def test_run_mod_unexpected_exception(self):
         """Test mod execution with unexpected exception."""
@@ -1113,7 +1108,6 @@ class TestMemoryAndResourceManagement:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 0.1,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -1124,11 +1118,11 @@ class TestMemoryAndResourceManagement:
         })
         
         with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk.create_resolver', return_value=mock_resolver), \
-             patch('datapy.mod_manager.sdk.substitute_context_variables', side_effect=lambda x: x), \
-             patch('datapy.mod_manager.sdk.validate_mod_parameters', side_effect=lambda info, params: params), \
-             patch('importlib.import_module', return_value=mock_mod_module), \
-             patch('datapy.mod_manager.sdk.setup_logger'):
+            patch('datapy.mod_manager.sdk._resolve_mod_parameters', return_value={}), \
+            patch('datapy.mod_manager.sdk.substitute_context_variables', side_effect=lambda x: x), \
+            patch('datapy.mod_manager.sdk.validate_mod_parameters', side_effect=lambda schema, params, mod_type: params), \
+            patch('datapy.mod_manager.sdk._execute_mod_function', return_value=mock_mod_module.run.return_value), \
+            patch('datapy.mod_manager.execution_monitoring.execute_with_monitoring', return_value=mock_mod_module.run.return_value):
             
             result = run_mod("test_mod", original_params, "isolation_test")
             

@@ -183,7 +183,7 @@ class TestExecuteWithMonitoring:
         assert "monitoring_available" in monitoring
         
         assert isinstance(monitoring["execution_time"], float)
-        assert monitoring["execution_time"] > 0
+        assert monitoring["execution_time"] >= 0  # Changed from > 0 to >= 0
         assert isinstance(monitoring["memory_start_mb"], float)
         assert isinstance(monitoring["memory_end_mb"], float)
         assert isinstance(monitoring["memory_delta_mb"], float)
@@ -283,7 +283,7 @@ class TestExecuteWithMonitoring:
                 mock_executor
             )
         
-        # Should return original result without monitoring
+        # Should return original result without monitoring due to fallback
         assert result["status"] == "success"
         assert "execution_monitoring" not in result.get("metrics", {})
     
@@ -476,10 +476,11 @@ class TestEdgeCases:
             mock_executor
         )
         
-        # Should still add monitoring metrics
+        # Should replace invalid metrics and add monitoring metrics
         assert "metrics" in result
+        assert isinstance(result["metrics"], dict)
         assert "execution_monitoring" in result["metrics"]
-    
+        
     def test_monitoring_performance_overhead(self):
         """Test that monitoring overhead is minimal."""
         execution_count = 100

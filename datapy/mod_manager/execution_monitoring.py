@@ -87,13 +87,13 @@ def execute_with_monitoring(
     Returns:
         ModResult dictionary with monitoring metrics added
     """
-    monitor = _get_execution_monitor()
-    
-    # Capture initial state
-    start_time = time.perf_counter()
-    memory_start = monitor.get_memory_usage_mb()
-    
     try:
+        monitor = _get_execution_monitor()
+        
+        # Capture initial state
+        start_time = time.perf_counter()
+        memory_start = monitor.get_memory_usage_mb()
+        
         # Execute the mod
         result = original_executor(mod_type, params, mod_name)
         
@@ -105,6 +105,9 @@ def execute_with_monitoring(
         # Add monitoring metrics to result
         if isinstance(result, dict):
             if "metrics" not in result:
+                result["metrics"] = {}
+            elif not isinstance(result["metrics"], dict):
+                # If metrics exists but is not a dict, replace it
                 result["metrics"] = {}
             
             result["metrics"]["execution_monitoring"] = {

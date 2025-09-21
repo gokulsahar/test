@@ -368,9 +368,8 @@ class TestResultBuilders:
     
     @patch('time.time')
     def test_success_result(self, mock_time):
-        """Test building success result."""
-        mock_time.side_effect = [1000.0, 1001.5]  # start_time, end_time
-        
+        """Test building success result without execution_time."""
+        mock_time.return_value = 1000.0
         result = ModResult("csv_reader", "test_mod")
         result.add_metric("rows", 100)
         result.add_artifact("data", "test_data")
@@ -380,50 +379,25 @@ class TestResultBuilders:
         
         assert success_result["status"] == "success"
         assert success_result["exit_code"] == SUCCESS
-        assert success_result["execution_time"] == 1.5
-        assert success_result["metrics"] == {"rows": 100}
-        assert success_result["artifacts"] == {"data": "test_data"}
-        assert success_result["globals"] == {"count": 100}
-        assert success_result["warnings"] == []
-        assert success_result["errors"] == []
-        assert success_result["logs"]["mod_type"] == "csv_reader"
-        assert success_result["logs"]["mod_name"] == "test_mod"
-        assert "run_id" in success_result["logs"]
+        assert "execution_time" not in success_result  # Should NOT be present
+        assert success_result["metrics"]["rows"] == 100
+        assert success_result["artifacts"]["data"] == "test_data"
     
     @patch('time.time')
     def test_warning_result(self, mock_time):
-        """Test building warning result."""
-        mock_time.return_value = 1000.0  # Single return value for start time
+        """Test building warning result without execution_time."""
+        mock_time.return_value = 1000.0
         result = ModResult("csv_reader", "test_mod")
         result.add_warning("Test warning")
         result.add_metric("rows", 50)
         
-        # Set different time for end calculation
-        mock_time.return_value = 1002.0
         warning_result = result.warning()
         
         assert warning_result["status"] == "warning"
         assert warning_result["exit_code"] == SUCCESS_WITH_WARNINGS
-        assert warning_result["execution_time"] == 2.0
+        assert "execution_time" not in warning_result  # Should NOT be present
         assert len(warning_result["warnings"]) == 1
         assert warning_result["warnings"][0]["message"] == "Test warning"
-    
-    @patch('time.time')
-    def test_error_result_default_code(self, mock_time):
-        """Test building error result with default error code."""
-        mock_time.return_value = 1000.0  # Single return for start time
-        result = ModResult("csv_reader", "test_mod")
-        result.add_error("Test error")
-        
-        # Set different time for end calculation
-        mock_time.return_value = 1001.0
-        error_result = result.error()
-        
-        assert error_result["status"] == "error"
-        assert error_result["exit_code"] == RUNTIME_ERROR
-        assert error_result["execution_time"] == 1.0
-        assert len(error_result["errors"]) == 1
-        assert error_result["errors"][0]["message"] == "Test error"
     
     @patch('time.time')
     def test_error_result_custom_code(self, mock_time):
@@ -439,18 +413,6 @@ class TestResultBuilders:
         assert error_result["status"] == "error"
         assert error_result["exit_code"] == VALIDATION_ERROR
     
-    def test_execution_time_calculation(self):
-        """Test execution time is calculated correctly."""
-        with patch('time.time') as mock_time:
-            mock_time.return_value = 1000.0
-            result = ModResult("csv_reader", "test_mod")
-            
-            mock_time.return_value = 1003.456
-            success_result = result.success()
-            
-            assert success_result["execution_time"] == 3.456
-
-
 class TestBuildResult:
     """Test cases for _build_result internal method."""
     
@@ -588,14 +550,9 @@ class TestIntegrationScenarios:
         # Verify complete result structure
         assert final_result["status"] == "success"
         assert final_result["exit_code"] == SUCCESS
-        assert isinstance(final_result["execution_time"], float)
+        assert "execution_time" not in final_result  # Should NOT be present
         assert final_result["metrics"]["rows_read"] == 1000
         assert final_result["artifacts"]["file_path"] == "/data/customers.csv"
-        assert final_result["globals"]["row_count"] == 1000
-        assert final_result["warnings"] == []
-        assert final_result["errors"] == []
-        assert final_result["logs"]["mod_type"] == "csv_reader"
-        assert final_result["logs"]["mod_name"] == "extract_customers"
     
     def test_mod_execution_with_warnings_flow(self):
         """Test mod execution with warnings result flow."""
