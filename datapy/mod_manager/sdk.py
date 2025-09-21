@@ -373,3 +373,60 @@ def setup_context(context_path: str = None) -> None:
     
     # Set context using existing SDK function
     set_context(final_context_path)
+    
+    
+def get_context_value(variable_path: str) -> Any:
+    """
+    Get a context value by path, loading context if needed.
+    
+    Enables access to control variables before mod execution for flow control.
+    Context is loaded once and cached for the entire execution session.
+    
+    Args:
+        variable_path: Dot-separated path like 'feature.enabled' or 'db.host'
+        
+    Returns:
+        Value from context (preserves original type: str, int, bool, list, dict, etc.)
+        
+    Raises:
+        RuntimeError: If no context file is set or context loading fails
+        ValueError: If variable_path is invalid or not found in context
+        
+    Examples:
+        # Set context first
+        set_context("config.json")
+        
+        # Access control variables for flow control
+        if get_context_value("processing.enable_validation"):
+            run_validation_pipeline()
+        
+        batch_size = get_context_value("processing.batch_size")
+        debug_mode = get_context_value("app.debug")
+        
+        # Works with nested paths
+        db_host = get_context_value("database.primary.host")
+    """
+    from .context import _context_file_path, _load_context_data, _get_context_value
+    
+    if not _context_file_path:
+        raise RuntimeError("No context file set - call set_context() first")
+    
+    if not variable_path or not isinstance(variable_path, str):
+        raise ValueError("variable_path must be a non-empty string")
+    
+    variable_path = variable_path.strip()
+    if not variable_path:
+        raise ValueError("variable_path cannot be empty or whitespace only")
+    
+    try:
+        context_data = _load_context_data()
+        return _get_context_value(variable_path, context_data)
+    except RuntimeError as e:
+        # Re-raise context loading errors with more context
+        raise RuntimeError(f"Failed to load context for variable '{variable_path}': {e}")
+    except ValueError as e:
+        # Re-raise variable access errors as-is (already have good error messages)
+        raise
+    except Exception as e:
+        # Catch any unexpected errors
+        raise RuntimeError(f"Unexpected error accessing context variable '{variable_path}': {e}")

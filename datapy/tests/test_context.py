@@ -1858,3 +1858,79 @@ class TestMemoryManagement:
         # Clear and verify cleanup
         clear_context()
         assert context_module._context_data is None
+        
+        
+    class TestGetContextValueSDK:
+        """Test cases for get_context_value SDK function - reusing existing context test patterns."""
+        
+        def teardown_method(self):
+            """Clean up after each test."""
+            clear_context()
+        
+        def test_get_context_value_reuses_existing_context_functionality(self, tmp_path):
+            """Test that get_context_value works with existing context test patterns."""
+            from datapy.mod_manager.sdk import get_context_value
+            
+            # Reuse the complex context from existing integration tests
+            context_data = {
+                "environment": {
+                    "name": "production",
+                    "region": "us-east-1"
+                },
+                "database": {
+                    "cluster": {
+                        "primary": {"host": "prod-db-primary.aws.com", "port": 5432}
+                    }
+                },
+                "application": {
+                    "features": {
+                        "caching": True,
+                        "debug_mode": False
+                    }
+                }
+            }
+            
+            context_file = tmp_path / "sdk_context.json"
+            context_file.write_text(json.dumps(context_data, indent=2))
+            set_context(str(context_file))
+            
+            # Test the same patterns from existing tests
+            assert get_context_value("environment.name") == "production"
+            assert get_context_value("database.cluster.primary.host") == "prod-db-primary.aws.com"
+            assert get_context_value("database.cluster.primary.port") == 5432
+            assert get_context_value("application.features.caching") is True
+            assert get_context_value("application.features.debug_mode") is False
+        
+        def test_get_context_value_error_patterns_from_existing_tests(self, tmp_path):
+            """Test error patterns that match existing context tests."""
+            from datapy.mod_manager.sdk import get_context_value
+            
+            # No context set - matches existing test pattern
+            clear_context()
+            with pytest.raises(RuntimeError, match="No context file set"):
+                get_context_value("any.path")
+            
+            # Missing variable - reuse existing error test pattern
+            context_data = {"valid": "value"}
+            context_file = tmp_path / "error_context.json"
+            context_file.write_text(json.dumps(context_data))
+            set_context(str(context_file))
+            
+            with pytest.raises(ValueError, match="Context variable not found"):
+                get_context_value("missing")
+        
+        def test_get_context_value_shares_cache_with_substitute_context_variables(self, tmp_path):
+            """Test that both functions share the same cache - key integration test."""
+            from datapy.mod_manager.sdk import get_context_value
+            
+            context_data = {"shared": {"value": "cached"}}
+            context_file = tmp_path / "shared_context.json"
+            context_file.write_text(json.dumps(context_data))
+            set_context(str(context_file))
+            
+            # Load via substitute_context_variables first
+            result = substitute_context_variables({"test": "${shared.value}"})
+            assert result["test"] == "cached"
+            
+            # get_context_value should use same cache
+            assert get_context_value("shared.value") == "cached"
