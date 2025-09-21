@@ -156,11 +156,11 @@ class TestTabDelimitedFormatter:
         formatted = self.formatter.format(record)
         fields = formatted.split('\t')
         
-        # Exception should be in extra fields
+        # Exception should be in extra fields as stack_trace (not exception)
         extra_fields = json.loads(fields[6])
-        assert "exception" in extra_fields
-        assert "ValueError" in extra_fields["exception"]
-        assert "Test exception" in extra_fields["exception"]
+        assert "stack_trace" in extra_fields
+        assert "ValueError: Test exception" in extra_fields["stack_trace"]
+        assert "Traceback" in extra_fields["stack_trace"]
     
     def test_non_serializable_extra_fields(self):
         """Test handling of non-JSON-serializable extra fields."""

@@ -74,7 +74,7 @@ class TabDelimitedFormatter(logging.Formatter):
     
     def format(self, record: logging.LogRecord) -> str:
         """
-        Format log record as tab-delimited structure.
+        Format log record as tab-delimited structure with automatic stack traces.
         
         Format: TIMESTAMP \t LEVEL \t LOGGER \t MOD_TYPE \t MOD_NAME \t MESSAGE \t EXTRA_FIELDS
         
@@ -82,8 +82,10 @@ class TabDelimitedFormatter(logging.Formatter):
             record: Log record to format
             
         Returns:
-            Tab-delimited log entry
+            Tab-delimited log entry with full stack traces for warnings/errors
         """
+        import traceback
+        
         # Core fields
         timestamp = datetime.fromtimestamp(record.created).isoformat() + "Z"
         level = record.levelname
@@ -113,10 +115,20 @@ class TabDelimitedFormatter(logging.Formatter):
                 except (TypeError, ValueError):
                     extra_fields[key] = str(value)
         
-        # Handle exceptions
-        if record.exc_info:
-            exception_text = self.formatException(record.exc_info)
-            extra_fields["exception"] = exception_text
+        # For WARNING, ERROR, CRITICAL: automatically add full stack trace
+        if record.levelno >= logging.WARNING:
+            
+            # If there's already exception info, use it
+            if record.exc_info:
+                stack_trace = self.formatException(record.exc_info)
+                extra_fields["stack_trace"] = stack_trace
+            else:
+                # Generate current stack trace for warnings/errors without exceptions
+                current_stack = traceback.format_stack()
+                # Remove the last few frames (formatter internals)
+                filtered_stack = current_stack[:-3]  # Remove formatter, logging internals
+                stack_trace = ''.join(filtered_stack).strip()
+                extra_fields["stack_trace"] = stack_trace
         
         # Convert extra fields to JSON string
         if extra_fields:
@@ -138,7 +150,7 @@ class TabDelimitedFormatter(logging.Formatter):
             mod_type,
             mod_name,
             message,
-            extra_fields_str
+            extra_fields_str  # Stack trace will be in here
         ]
         
         return '\t'.join(log_parts)

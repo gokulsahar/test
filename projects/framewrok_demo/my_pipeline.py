@@ -16,11 +16,11 @@ def pre_run():
 
 def run_pipeline(logger):
     """Main pipeline execution."""
-    clients = run_mod("csv_reader", {"file_path": "${data.input_path}/clients.csv"})
+    clients = run_mod("csv_reader", {"file_path": "${data.input_path}/large_clients.csv"})
     if clients["status"] != "success":
         return clients
 
-    logger.info(f"clientresult ::\n{clients}")
+    logger.info(f"clientresult ::\n{clients['metrics']}")
     # Use context to control whether filtering is needed
     enable_filtering = get_context_value("pipeline.enable_filtering")
     if enable_filtering:
@@ -32,6 +32,7 @@ def run_pipeline(logger):
     else:
         logger.info("Filtering disabled - using all client data")
         data_for_output = clients["artifacts"]["data"]
+    logger.info(f"filterresult ::\n{filtered['metrics']}")
 
     # Use context to control output format
     output_format = get_context_value("pipeline.output_format")
@@ -40,6 +41,7 @@ def run_pipeline(logger):
     else:
         report = run_mod("csv_writer", {"data": data_for_output,"output_path": "${data.output_path}/client_report.csv"})
     
+    logger.info(f"reportresult ::\n{report['metrics']}")
     return report
 
 
