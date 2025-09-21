@@ -15,6 +15,7 @@ from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
 from .registry import get_registry
 from .parameter_validation import validate_mod_parameters
+from .execution_monitoring import execute_with_monitoring
 
 logger = setup_logger(__name__)
 
@@ -115,7 +116,7 @@ def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, 
     try:
         # Import the mod module
         module_path = mod_info['module_path']
-        mod_logger.info(f"Importing mod module: {module_path}")
+        mod_logger.debug(f"Importing mod module: {module_path}")
         mod_module = importlib.import_module(module_path)
         
         # Validate mod structure
@@ -132,7 +133,7 @@ def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, 
         params_with_meta['_mod_type'] = mod_type
         
         # Execute mod function
-        mod_logger.info(f"Executing mod function", extra={"params_count": len(validated_params)})
+        mod_logger.debug(f"Executing mod function", extra={"params_count": len(validated_params)})
         result = run_func(params_with_meta)
         
         # Validate result structure
@@ -155,7 +156,7 @@ def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, 
         result['logs']['mod_name'] = mod_name
         result['logs']['mod_type'] = mod_type
         
-        mod_logger.info(f"Mod execution completed", extra={
+        mod_logger.debug(f"Mod execution completed", extra={
             "status": result['status'],
             "execution_time": result['execution_time'],
             "exit_code": result['exit_code']
@@ -193,74 +194,65 @@ def _validate_mod_execution_inputs(mod_type: str, params: Dict[str, Any], mod_na
         raise ValueError("mod_name must be a non-empty string")
 
 
-def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = None) -> Dict[str, Any]:
+def run_mod(mod_type: str, params: Dict[str, Any], mod_name: str = None) -> Dict[str, Any]:
     """
-    Execute a DataPy mod with complete parameter validation and execution orchestration.
+    Execute a mod with the given parameters and execution monitoring.
+    
+    This is the main entry point for mod execution. It handles parameter resolution,
+    validation, and orchestrates execution with automatic monitoring.
     
     Args:
-        mod_type: Mod type identifier (looked up in registry)
-        params: Parameters for the mod
-        mod_name: Unique name for this mod instance (auto-generated if None)
+        mod_type: Type of mod to execute (must be registered)
+        params: Parameters for mod execution
+        mod_name: Optional name for mod instance (auto-generated if None)
         
     Returns:
-        ModResult dictionary with execution results
+        ModResult dictionary with execution results and monitoring metrics
+        
+    Examples:
+        # Basic execution
+        result = run_mod("csv_reader", {"file_path": "data.csv"})
+        
+        # Check monitoring metrics
+        monitoring = result.get("metrics", {}).get("execution_monitoring", {})
+        print(f"Execution time: {monitoring.get('execution_time')}s")
+        print(f"Memory used: {monitoring.get('memory_delta_mb')}MB")
     """
+    # Validate inputs
+    if mod_name is None:
+        mod_name = _auto_generate_mod_name(mod_type)
+    
+    _validate_mod_execution_inputs(mod_type, params, mod_name)
+    
+    logger.info(f"Starting mod execution: {mod_type} (instance: {mod_name})")
+    
     try:
-        # Clean and validate inputs
-        mod_type = mod_type.strip()
-        
-        # Auto-generate mod_name if not provided
-        if mod_name is None:
-            mod_name = _auto_generate_mod_name(mod_type)
-        else:
-            mod_name = mod_name.strip()
-        
-        _validate_mod_execution_inputs(mod_type, params, mod_name)
-        
-        # Start execution logging
-        logger.info(f"Starting mod execution: {mod_name} ({mod_type})")
-        
-        # 1. Get mod info from registry (just lookup)
+        # Registry lookup
         registry = get_registry()
-        try:
-            mod_info = registry.get_mod_info(mod_type)
-            logger.info(f"Found mod in registry: {mod_type}")
-        except ValueError as e:
-            suggestion = f"python -m datapy register-mod <module_path>"
-            return validation_error(mod_name, f"{e}. Register it with: {suggestion}")
+        mod_info = registry.get_mod_info(mod_type)
         
-        # 2. Resolve parameters (project defaults + job params only)
-        try:
-            resolved_params = _resolve_mod_parameters(mod_type, params)
-            logger.debug(f"Parameters resolved", extra={"param_count": len(resolved_params)})
-        except RuntimeError as e:
-            return validation_error(mod_name, str(e))
+        # Parameter resolution with context substitution
+        resolved_params = _resolve_mod_parameters(mod_type, params)
+        substituted_params = substitute_context_variables(resolved_params)
         
-        # 3. Context variable substitution (NEW - replaces global config substitution)
-        try:
-            substituted_params = substitute_context_variables(resolved_params)
-            logger.debug(f"Context substitution completed")
-        except (ValueError, RuntimeError) as e:
-            return validation_error(mod_name, f"Context substitution failed: {e}")
+        # Parameter validation using registry schema
+        validated_params = validate_mod_parameters(
+            mod_info['config_schema'],
+            substituted_params,
+            mod_type
+        )
         
-        # 4. Validate parameters using JSON Schema
-        try:
-            validated_params = validate_mod_parameters(mod_info, substituted_params)
-            logger.info(f"Parameters validated successfully")
-        except ValueError as e:
-            return validation_error(mod_name, str(e))
+        # Execute with monitoring (always enabled)
+        return execute_with_monitoring(
+            mod_type,
+            params,
+            mod_name,
+            lambda mt, p, mn: _execute_mod_function(mod_info, validated_params, mod_name)
+        )
         
-        # 5. Execute mod function
-        result = _execute_mod_function(mod_info, validated_params, mod_name)
-        
-        return result
-        
-    except ValueError as e:
-        return validation_error(mod_name or "unknown", str(e))
-    except RuntimeError as e:
-        return runtime_error(mod_name or "unknown", str(e))
     except Exception as e:
-        return runtime_error(mod_name or "unknown", f"Unexpected error: {e}")
+        logger.error(f"Mod execution failed: {e}", exc_info=True)
+        return runtime_error(mod_name, f"Mod execution failed: {e}")
 
 
 # Command line argument parsing and setup functions

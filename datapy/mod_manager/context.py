@@ -41,7 +41,7 @@ def set_context(file_path: str) -> None:
     _context_file_path = file_path.strip()
     _context_data = None  # Reset cached data
     
-    logger.info(f"Context file set: {_context_file_path}")
+    logger.debug(f"Context file set: {_context_file_path}")
 
 
 def clear_context() -> None:
@@ -51,7 +51,7 @@ def clear_context() -> None:
     _context_file_path = None
     _context_data = None
     
-    logger.info("Context cleared")
+    logger.debug("Context cleared")
 
 
 def _load_context_data() -> Dict[str, Any]:
@@ -87,7 +87,7 @@ def _load_context_data() -> Dict[str, Any]:
         if not isinstance(_context_data, dict):
             raise RuntimeError(f"Context file must contain a JSON dictionary: {_context_file_path}")
         
-        logger.info(f"Context loaded: {len(_context_data)} top-level keys")
+        logger.debug(f"Context loaded: {len(_context_data)} top-level keys")
         return _context_data
         
     except json.JSONDecodeError as e:

@@ -57,7 +57,7 @@ class ProjectConfig:
         if config_path:
             self._load_config_file(config_path)
         else:
-            logger.info("No project configuration found, using defaults only")
+            logger.debug("No project configuration found, using defaults only")
             self.config_data = {}
 
     def _find_config_file(self) -> Optional[Path]:
@@ -100,7 +100,7 @@ class ProjectConfig:
             self.project_path = config_path.parent
             self._set_default_project_name()
             
-            logger.info(f"Found project config: {config_path}")
+            logger.debug(f"Found project config: {config_path}")
             
         except yaml.YAMLError as e:
             raise RuntimeError(f"Invalid YAML in project config {config_path}: {e}")
@@ -250,7 +250,7 @@ def clear_project_config() -> None:
     """Clear cached project config (for testing)."""
     global _global_project_config
     _global_project_config = None
-    logger.info("Project config cache cleared")
+    logger.debug("Project config cache cleared")
 
 
 def load_job_config(config_path: str) -> Dict[str, Any]:
@@ -284,7 +284,7 @@ def load_job_config(config_path: str) -> Dict[str, Any]:
         if not isinstance(config, dict):
             raise RuntimeError(f"Job config {config_path} must contain a YAML dictionary")
             
-        logger.info(f"Loaded job config: {config_path}")
+        logger.debug(f"Loaded job config: {config_path}")
         return config
         
     except yaml.YAMLError as e:

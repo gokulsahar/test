@@ -100,7 +100,7 @@ class TabDelimitedFormatter(logging.Formatter):
             'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
             'relativeCreated', 'thread', 'threadName', 'processName', 
             'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
-            'mod_name', 'message'
+            'mod_name', 'message', 'taskName'
         }
         
         extra_fields = {}
@@ -176,7 +176,7 @@ def setup_console_logging(log_config: Dict[str, Any]) -> None:
             
         # Test logging works
         test_logger = logging.getLogger("datapy.logging.test")
-        test_logger.info("Console logging initialized successfully")
+        test_logger.debug("Console logging initialized successfully")
         
     except Exception as e:
         raise RuntimeError(f"Failed to setup console logging: {e}")

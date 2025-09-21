@@ -82,7 +82,7 @@ class ModRegistry:
             if not isinstance(data['mods'], dict):
                 raise RuntimeError("Registry 'mods' section must be a dictionary")
             
-            logger.info(f"Loaded registry with {len(data['mods'])} mods")
+            logger.debug(f"Loaded registry with {len(data['mods'])} mods")
             return data
             
         except json.JSONDecodeError as e:
@@ -125,7 +125,7 @@ class ModRegistry:
                 # Simple rename if target doesn't exist
                 os.rename(temp_file, self.registry_path)
             
-            logger.info("Registry saved successfully")
+            logger.debug("Registry saved successfully")
             
         except (OSError, PermissionError, json.JSONEncodeError) as e:
             # Clean up temp file if it exists
@@ -191,7 +191,7 @@ class ModRegistry:
             # Save updated registry
             self._save_registry()
             
-            logger.info(f"Deleted mod from registry: {mod_type}")
+            logger.debug(f"Deleted mod from registry: {mod_type}")
             return True
             
         except Exception as e:
@@ -307,7 +307,7 @@ class ModRegistry:
         # Save registry
         self._save_registry()
         
-        logger.info(f"Registered mod: {mod_type} ({module_path})")
+        logger.debug(f"Registered mod: {mod_type} ({module_path})")
         return True
         
     def validate_registry(self) -> List[str]:

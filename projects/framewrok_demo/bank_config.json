@@ -1,4 +1,8 @@
 {
+  "pipeline": {
+    "enable_filtering": true,
+    "output_format": "excel"
+  },
   "data": {
     "input_path": "demo_data",
     "output_path": "demo_output"

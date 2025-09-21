@@ -199,11 +199,9 @@ class ModResult:
         if not isinstance(exit_code, int) or exit_code < 0:
             raise ValueError(f"Invalid exit_code: {exit_code}. Must be non-negative integer")
         
-        execution_time = time.time() - self.start_time
         
         result = {
             "status": status,
-            "execution_time": round(execution_time, 3),
             "exit_code": exit_code,
             "metrics": self.metrics.copy(),
             "artifacts": self.artifacts.copy(),
