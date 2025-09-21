@@ -368,7 +368,6 @@ class TestResultBuilders:
     
     @patch('time.time')
     def test_success_result(self, mock_time):
-        """Test building success result without execution_time."""
         mock_time.return_value = 1000.0
         result = ModResult("csv_reader", "test_mod")
         result.add_metric("rows", 100)
@@ -379,13 +378,11 @@ class TestResultBuilders:
         
         assert success_result["status"] == "success"
         assert success_result["exit_code"] == SUCCESS
-        assert "execution_time" not in success_result  # Should NOT be present
         assert success_result["metrics"]["rows"] == 100
         assert success_result["artifacts"]["data"] == "test_data"
     
     @patch('time.time')
     def test_warning_result(self, mock_time):
-        """Test building warning result without execution_time."""
         mock_time.return_value = 1000.0
         result = ModResult("csv_reader", "test_mod")
         result.add_warning("Test warning")
@@ -395,7 +392,6 @@ class TestResultBuilders:
         
         assert warning_result["status"] == "warning"
         assert warning_result["exit_code"] == SUCCESS_WITH_WARNINGS
-        assert "execution_time" not in warning_result  # Should NOT be present
         assert len(warning_result["warnings"]) == 1
         assert warning_result["warnings"][0]["message"] == "Test warning"
     
@@ -550,7 +546,6 @@ class TestIntegrationScenarios:
         # Verify complete result structure
         assert final_result["status"] == "success"
         assert final_result["exit_code"] == SUCCESS
-        assert "execution_time" not in final_result  # Should NOT be present
         assert final_result["metrics"]["rows_read"] == 1000
         assert final_result["artifacts"]["file_path"] == "/data/customers.csv"
     

@@ -157,7 +157,6 @@ def _create_cli_result_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     """Create CLI-friendly result summary."""
     cli_result = {
         "status": result['status'],
-        "execution_time": result['execution_time'],
         "exit_code": result['exit_code'],
         "metrics": result['metrics'],
         "warnings": result['warnings'],

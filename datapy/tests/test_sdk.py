@@ -174,7 +174,6 @@ class TestExecuteModFunction:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 1.5,
             "exit_code": 0,
             "metrics": {"rows": 100},
             "artifacts": {"data": "test_data"},
@@ -313,7 +312,6 @@ class TestExecuteModFunction:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "invalid_status",
-            "execution_time": 1.5,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -376,7 +374,6 @@ class TestRunMod:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 1.5,
             "exit_code": 0,
             "metrics": {"rows": 100},
             "artifacts": {"data": "test_data"},
@@ -415,7 +412,6 @@ class TestRunMod:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 1.5,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -447,7 +443,7 @@ class TestRunMod:
             result = run_mod("unknown_mod", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
+            assert result["exit_code"] == VALIDATION_ERROR
             assert "not found in registry" in result["errors"][0]["message"]
     
     def test_run_mod_parameter_resolution_failure(self):
@@ -461,7 +457,7 @@ class TestRunMod:
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
+            assert result["exit_code"] == VALIDATION_ERROR
             assert "Resolution failed" in result["errors"][0]["message"]
     
     def test_run_mod_context_substitution_failure(self):
@@ -478,7 +474,7 @@ class TestRunMod:
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
+            assert result["exit_code"] == VALIDATION_ERROR
             assert "Substitution failed" in result["errors"][0]["message"]
     
     def test_run_mod_parameter_validation_failure(self):
@@ -499,7 +495,7 @@ class TestRunMod:
             result = run_mod("test_reader", {"input": "param"}, "test_mod")
             
             assert result["status"] == "error"
-            assert result["exit_code"] == RUNTIME_ERROR  # Changed from VALIDATION_ERROR
+            assert result["exit_code"] == VALIDATION_ERROR
             assert "Validation failed" in result["errors"][0]["message"]
     
     def test_run_mod_input_validation_failure(self):
@@ -791,7 +787,6 @@ class TestIntegrationScenarios:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 2.45,
             "exit_code": SUCCESS,
             "metrics": {
                 "rows_processed": 5000,
@@ -854,7 +849,6 @@ class TestIntegrationScenarios:
             # Verify successful execution
             assert result["status"] == "success"
             assert result["exit_code"] == SUCCESS
-            assert result["execution_time"] == 2.45
             assert result["metrics"]["rows_processed"] == 5000
             assert len(result["warnings"]) == 1
             assert len(result["errors"]) == 0
@@ -884,7 +878,6 @@ class TestIntegrationScenarios:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "warning",
-            "execution_time": 1.0,
             "exit_code": SUCCESS_WITH_WARNINGS,
             "metrics": {"processed": 100},
             "artifacts": {},
@@ -962,7 +955,6 @@ class TestEdgeCases:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 0.1,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -999,7 +991,6 @@ class TestEdgeCases:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 0.1,
             "exit_code": 0,
             "metrics": {},
             "artifacts": {},
@@ -1031,7 +1022,6 @@ class TestEdgeCases:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 5.0,
             "exit_code": 0,
             "metrics": large_metrics,
             "artifacts": large_artifacts,
@@ -1245,7 +1235,6 @@ class TestIntegrationScenarios:
         mock_mod_module = MagicMock()
         mock_mod_module.run = MagicMock(return_value={
             "status": "success",
-            "execution_time": 2.45,
             "exit_code": SUCCESS,
             "metrics": {
                 "rows_processed": 5000,
@@ -1308,7 +1297,6 @@ class TestIntegrationScenarios:
             # Verify successful execution
             assert result["status"] == "success"
             assert result["exit_code"] == SUCCESS
-            assert result["execution_time"] == 2.45
             assert result["metrics"]["rows_processed"] == 5000
             assert len(result["warnings"]) == 1
             assert len(result["errors"]) == 0
