@@ -1,0 +1,43 @@
+{
+  "data": {
+    "input_file": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/customers_large.csv",
+    "output_dir_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/pandas",
+    "output_dir_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/polars",
+    "output_file_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/pandas/customers_filtered_pandas.csv",
+    "output_file_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/polars/customers_filtered_polars.csv"
+  },
+  "processing": {
+    "encoding": "utf-8",
+    "include_header": true,
+    "overwrite_existing": true,
+    "create_directories": true
+  },
+  "filters": {
+    "min_age": 25,
+    "max_age": 65,
+    "min_income": 30000,
+    "min_balance": 1000,
+    "active_since_date": "2022-01-01"
+  },
+  "columns": {
+    "keep_columns": [
+      "customer_id",
+      "name", 
+      "email",
+      "age",
+      "city",
+      "state",
+      "annual_income",
+      "account_balance",
+      "credit_score",
+      "last_purchase_date",
+      "preferred_category",
+      "total_purchases"
+    ],
+    "sort_columns": ["annual_income", "account_balance"],
+    "sort_ascending": [false, false]
+  },
+  "logging": {
+    "log_level": "INFO"
+  }
+}

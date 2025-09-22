@@ -1,29 +1,42 @@
 """
 Data Filter Mod for DataPy Framework.
 
-Advanced data filtering with custom expressions, standard operators, and dual engine support.
-Supports both pandas and polars with production-grade error handling and performance optimization.
+Advanced data filtering with enhanced reject mode handling, custom expressions, 
+standard operators, and dual engine support (pandas/polars).
 """
 
 import pandas as pd
 import polars as pl
-from typing import Dict, Any, Union, List
-from pathlib import Path
+from typing import Dict, Any, Union, Tuple, Optional
 
 from datapy.mod_manager.result import ModResult
 from datapy.mod_manager.base import ModMetadata, ConfigSchema
 from datapy.mod_manager.logger import setup_logger
 from datapy.utils.expression_evaluator import get_expression_evaluator
 
+# Supported engines configuration
+SUPPORTED_ENGINES = {
+    "pandas": {
+        "module": "pandas",
+        "dataframe_types": ["pandas.DataFrame"],
+        "packages": ["pandas>=1.5.0"]
+    },
+    "polars": {
+        "module": "polars",
+        "dataframe_types": ["polars.DataFrame", "polars.LazyFrame"],
+        "packages": ["polars>=0.20.0"]
+    }
+}
+
 # Required metadata
 METADATA = ModMetadata(
     type="data_filter",
-    version="1.0.0",
-    description="Advanced data filtering with custom expressions and standard operators supporting pandas/polars",
+    version="2.0.0",
+    description="Advanced data filtering with reject modes, custom expressions and standard operators",
     category="transformer",
     input_ports=["data"],
-    output_ports=["filtered_data"],
-    globals=["filtered_rows", "original_rows", "filter_rate"],
+    output_ports=["filtered_data", "rejected_data"],
+    globals=["filtered_rows", "original_rows", "filter_rate", "rejected_rows"],
     packages=["pandas>=1.5.0", "polars>=0.20.0"]
 )
 
@@ -36,68 +49,41 @@ CONFIG_SCHEMA = ConfigSchema(
         },
         "filter_conditions": {
             "type": "dict",
-            "description": "Filter configuration with operators and/or custom expressions"
+            "description": "Enhanced filter configuration with operators and/or custom expressions"
         }
     },
     optional={
         "engine": {
             "type": "str",
             "default": "pandas",
-            "description": "Processing engine: 'pandas' or 'polars'",
-            "enum": ["pandas", "polars"]
+            "description": "Processing engine: " + ", ".join([f"'{eng}'" for eng in SUPPORTED_ENGINES.keys()]),
+            "enum": list(SUPPORTED_ENGINES.keys())
+        },
+        "reject_mode": {
+            "type": "str",
+            "default": "drop",
+            "description": "How to handle rejected rows: 'drop', 'flag', 'separate'",
+            "enum": ["drop", "flag", "separate"]
+        },
+        "reject_column": {
+            "type": "str",
+            "default": "_filter_rejected",
+            "description": "Column name for flagging rejected rows (used with 'flag' mode)"
         },
         "custom_functions": {
             "type": "dict",
             "default": {},
             "description": "Custom functions for expressions {name: function_or_import_path}"
-        },
-        "keep_columns": {
-            "type": "list",
-            "default": None,
-            "description": "List of columns to keep (None = keep all)"
-        },
-        "drop_duplicates": {
-            "type": "bool",
-            "default": False,
-            "description": "Remove duplicate rows after filtering"
-        },
-        "sort_by": {
-            "type": "str",
-            "default": None,
-            "description": "Column name to sort results by"
-        },
-        "ascending": {
-            "type": "bool",
-            "default": True,
-            "description": "Sort direction when sort_by is specified"
         }
     }
 )
 
 
 def run(params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Execute data filter with given parameters.
-    
-    Supports multiple filter types:
-    1. Standard operators: eq, ne, gt, lt, gte, lte, contains, in, between
-    2. Custom expressions with registered functions
-    3. Mixed filtering approaches
-    
-    Args:
-        params: Dictionary containing data and filter conditions
-        
-    Returns:
-        ModResult dictionary with filtered data, metrics, and status
-    """
-    # Extract mod context
+    """Execute data filter with enhanced reject mode handling."""
     mod_name = params.get("_mod_name", "data_filter")
     mod_type = params.get("_mod_type", "data_filter")
-    
-    # Setup logging with mod context
     logger = setup_logger(__name__, mod_type, mod_name)
-    
-    # Initialize result
     result = ModResult(mod_type, mod_name)
     
     try:
@@ -105,422 +91,324 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         data = params["data"]
         filter_conditions = params["filter_conditions"]
         engine = params.get("engine", "pandas")
+        reject_mode = params.get("reject_mode", "drop")
+        reject_column = params.get("reject_column", "_filter_rejected")
         custom_functions = params.get("custom_functions", {})
-        keep_columns = params.get("keep_columns", None)
-        drop_duplicates = params.get("drop_duplicates", False)
-        sort_by = params.get("sort_by", None)
-        ascending = params.get("ascending", True)
         
         logger.info(f"Starting data filter", extra={
-            "input_rows": _get_row_count(data),
-            "input_columns": _get_column_count(data),
+            "input_rows": _get_rows(data, engine),
             "engine": engine,
-            "custom_functions_count": len(custom_functions),
-            "filter_types": list(filter_conditions.keys())
+            "reject_mode": reject_mode,
+            "custom_functions_count": len(custom_functions)
         })
         
-        # Validate engine
-        if engine not in ["pandas", "polars"]:
-            error_msg = f"Unsupported engine: {engine}. Must be 'pandas' or 'polars'"
-            logger.error(error_msg)
-            result.add_error(error_msg)
+        # Validate parameters
+        if not _validate_engine(engine):
+            result.add_error(f"Unsupported or unavailable engine: {engine}")
             return result.error()
         
-        # Validate input data
         if not _is_valid_dataframe(data, engine):
-            error_msg = f"Invalid input data type for {engine} engine: {type(data)}"
-            logger.error(error_msg)
-            result.add_error(error_msg)
+            result.add_error(f"Invalid data type for {engine}: {type(data)}")
+            return result.error()
+        
+        if reject_mode not in ["drop", "flag", "separate"]:
+            result.add_error(f"Invalid reject_mode: {reject_mode}")
             return result.error()
         
         # Handle empty data
-        if _is_empty_dataframe(data, engine):
-            warning_msg = "Input data is empty"
-            logger.warning(warning_msg)
-            result.add_warning(warning_msg)
+        if _is_empty(data, engine):
+            result.add_warning("Input data is empty")
             result.add_artifact("filtered_data", data)
-            result.add_global("filtered_rows", 0)
-            result.add_global("original_rows", 0)
-            result.add_global("filter_rate", 0.0)
+            _add_metrics(result, 0, 0, 0, 0.0, reject_mode, engine)
             return result.warning()
         
-        # Store original metrics
-        original_rows = _get_row_count(data)
+        original_rows = _get_rows(data, engine)
         
-        # Apply filters based on engine
-        if engine == "pandas":
-            filtered_data = _filter_with_pandas(data, filter_conditions, custom_functions, logger)
-        else:  # polars
-            filtered_data = _filter_with_polars(data, filter_conditions, custom_functions, logger)
+        # Create filter mask
+        mask = _create_filter_mask(data, filter_conditions, custom_functions, engine, logger)
         
-        # Apply post-processing
-        filtered_data = _apply_post_processing(
-            filtered_data, keep_columns, drop_duplicates, sort_by, ascending, engine, logger, result
-        )
+        # Apply filtering based on reject mode
+        if reject_mode == "drop":
+            filtered_data = _apply_mask(data, mask, engine)
+            rejected_data = None
+            filtered_rows = _get_rows(filtered_data, engine)
+            rejected_rows = original_rows - filtered_rows
+        elif reject_mode == "flag":
+            filtered_data = _add_flag_column(data, mask, reject_column, engine)
+            rejected_data = None
+            filtered_rows = _get_rows(filtered_data, engine)
+            rejected_rows = _count_rejected_in_mask(mask, engine)
+        elif reject_mode == "separate":
+            filtered_data = _apply_mask(data, mask, engine)
+            rejected_data = _apply_mask(data, _invert_mask(mask, engine), engine)
+            filtered_rows = _get_rows(filtered_data, engine)
+            rejected_rows = _get_rows(rejected_data, engine)
         
         # Calculate metrics
-        filtered_rows = _get_row_count(filtered_data)
         filter_rate = (original_rows - filtered_rows) / original_rows if original_rows > 0 else 0.0
         
-        logger.info(f"Data filter completed", extra={
-            "original_rows": original_rows,
-            "filtered_rows": filtered_rows,
-            "filter_rate": f"{filter_rate:.2%}",
-            "final_columns": _get_column_count(filtered_data),
-            "engine": engine
-        })
-        
-        # Add metrics
-        result.add_metric("original_rows", original_rows)
-        result.add_metric("filtered_rows", filtered_rows)
-        result.add_metric("rows_removed", original_rows - filtered_rows)
-        result.add_metric("filter_rate", round(filter_rate, 4))
-        result.add_metric("final_columns", _get_column_count(filtered_data))
-        result.add_metric("engine_used", engine)
-        
-        # Add artifacts
+        # Add results
         result.add_artifact("filtered_data", filtered_data)
         result.add_artifact("filter_conditions_applied", filter_conditions)
+        if reject_mode == "separate" and rejected_data is not None:
+            result.add_artifact("rejected_data", rejected_data)
         
-        # Add globals for downstream mods
-        result.add_global("filtered_rows", filtered_rows)
-        result.add_global("original_rows", original_rows)
-        result.add_global("filter_rate", round(filter_rate, 4))
+        _add_metrics(result, original_rows, filtered_rows, rejected_rows, filter_rate, reject_mode, engine)
         
+        logger.info(f"Filter completed", extra={
+            "filtered_rows": filtered_rows,
+            "rejected_rows": rejected_rows,
+            "filter_rate": f"{filter_rate:.2%}"
+        })
         return result.success()
         
-    except KeyError as e:
-        error_msg = f"Missing required parameter: {e}"
-        logger.error(error_msg)
-        result.add_error(error_msg)
-        return result.error()
-        
     except Exception as e:
-        error_msg = f"Unexpected error in data filter: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        result.add_error(error_msg)
+        logger.error(f"Filter error: {e}", exc_info=True)
+        result.add_error(str(e))
         return result.error()
 
 
-def _filter_with_pandas(data: pd.DataFrame, filter_conditions: Dict[str, Any], 
-                       custom_functions: Dict[str, Any], logger) -> pd.DataFrame:
-    """Apply filters using pandas engine."""
-    filtered_data = data.copy()
-    evaluator = get_expression_evaluator(logger)
-    
-    # Register custom functions if provided
-    if custom_functions:
-        evaluator.register_functions(custom_functions)
-        logger.debug(f"Registered {len(custom_functions)} custom functions for pandas filtering")
-    
-    # Apply standard operator filters
-    operator_filters = filter_conditions.get("operators", {})
-    for column, conditions in operator_filters.items():
-        filtered_data = _apply_operator_filters_pandas(filtered_data, column, conditions, logger)
-    
-    # Apply custom expression filters
-    custom_expressions = filter_conditions.get("custom_expressions", [])
-    for expression in custom_expressions:
-        try:
-            filtered_data = evaluator.evaluate_filter(filtered_data, expression, "pandas")
-            remaining_rows = len(filtered_data)
-            logger.info(f"Applied custom expression filter", extra={
-                "expression": expression[:50] + "..." if len(expression) > 50 else expression,
-                "remaining_rows": remaining_rows
-            })
-        except Exception as e:
-            error_msg = f"Failed to apply custom expression '{expression}': {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg) from e
-    
-    return filtered_data
+def _validate_engine(engine: str) -> bool:
+    """Validate engine is supported."""
+    return engine in SUPPORTED_ENGINES
 
 
-def _filter_with_polars(data: Union[pl.DataFrame, pl.LazyFrame], filter_conditions: Dict[str, Any], 
-                       custom_functions: Dict[str, Any], logger) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Apply filters using polars engine."""
-    filtered_data = data.clone() if hasattr(data, 'clone') else data
-    evaluator = get_expression_evaluator(logger)
-    
-    # Register custom functions if provided
-    if custom_functions:
-        evaluator.register_functions(custom_functions)
-        logger.debug(f"Registered {len(custom_functions)} custom functions for polars filtering")
-    
-    # Apply standard operator filters
-    operator_filters = filter_conditions.get("operators", {})
-    for column, conditions in operator_filters.items():
-        filtered_data = _apply_operator_filters_polars(filtered_data, column, conditions, logger)
-    
-    # Apply custom expression filters
-    custom_expressions = filter_conditions.get("custom_expressions", [])
-    for expression in custom_expressions:
-        try:
-            filtered_data = evaluator.evaluate_filter(filtered_data, expression, "polars")
-            remaining_rows = _get_row_count(filtered_data)
-            logger.info(f"Applied custom expression filter", extra={
-                "expression": expression[:50] + "..." if len(expression) > 50 else expression,
-                "remaining_rows": remaining_rows
-            })
-        except Exception as e:
-            error_msg = f"Failed to apply custom expression '{expression}': {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg) from e
-    
-    return filtered_data
-
-
-def _apply_operator_filters_pandas(data: pd.DataFrame, column: str, 
-                                  conditions: Dict[str, Any], logger) -> pd.DataFrame:
-    """Apply standard operator filters for pandas."""
-    if column not in data.columns:
-        warning_msg = f"Filter column '{column}' not found in data, skipping"
-        logger.warning(warning_msg)
-        return data
-    
-    filtered_data = data.copy()
-    
-    for operator, value in conditions.items():
-        try:
-            if operator == "eq":  # equals
-                mask = filtered_data[column] == value
-            elif operator == "ne":  # not equals
-                mask = filtered_data[column] != value
-            elif operator == "gt":  # greater than
-                mask = pd.to_numeric(filtered_data[column], errors='coerce') > value
-            elif operator == "lt":  # less than
-                mask = pd.to_numeric(filtered_data[column], errors='coerce') < value
-            elif operator == "gte":  # greater than or equal
-                mask = pd.to_numeric(filtered_data[column], errors='coerce') >= value
-            elif operator == "lte":  # less than or equal
-                mask = pd.to_numeric(filtered_data[column], errors='coerce') <= value
-            elif operator == "contains":  # string contains
-                mask = filtered_data[column].astype(str).str.contains(str(value), na=False, regex=False)
-            elif operator == "startswith":  # string starts with
-                mask = filtered_data[column].astype(str).str.startswith(str(value), na=False)
-            elif operator == "endswith":  # string ends with
-                mask = filtered_data[column].astype(str).str.endswith(str(value), na=False)
-            elif operator == "in":  # value in list
-                if isinstance(value, (list, tuple)):
-                    mask = filtered_data[column].isin(value)
-                else:
-                    logger.warning(f"'in' operator requires list/tuple value, got {type(value)}")
-                    continue
-            elif operator == "not_in":  # value not in list
-                if isinstance(value, (list, tuple)):
-                    mask = ~filtered_data[column].isin(value)
-                else:
-                    logger.warning(f"'not_in' operator requires list/tuple value, got {type(value)}")
-                    continue
-            elif operator == "between":  # value between two values
-                if isinstance(value, (list, tuple)) and len(value) == 2:
-                    col_numeric = pd.to_numeric(filtered_data[column], errors='coerce')
-                    mask = (col_numeric >= value[0]) & (col_numeric <= value[1])
-                else:
-                    logger.warning(f"'between' operator requires list/tuple of 2 values, got {value}")
-                    continue
-            elif operator == "is_null":  # is null/NaN
-                mask = filtered_data[column].isna() if value else filtered_data[column].notna()
-            else:
-                logger.warning(f"Unknown operator '{operator}' for column '{column}', skipping")
-                continue
-            
-            # Apply mask
-            filtered_data = filtered_data[mask]
-            logger.info(f"Applied filter: {column} {operator} {value}, remaining rows: {len(filtered_data)}")
-            
-        except Exception as e:
-            logger.warning(f"Failed to apply filter {column} {operator} {value}: {str(e)}")
-            continue
-    
-    return filtered_data
-
-
-def _apply_operator_filters_polars(data: Union[pl.DataFrame, pl.LazyFrame], column: str, 
-                                  conditions: Dict[str, Any], logger) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Apply standard operator filters for polars."""
-    try:
-        import polars as pl
-    except ImportError:
-        raise ImportError("Polars engine requested but polars is not installed")
-    
-    # Get column list (works for both DataFrame and LazyFrame)
-    columns = data.columns if hasattr(data, 'columns') else data.collect_schema().names()
-    
-    if column not in columns:
-        warning_msg = f"Filter column '{column}' not found in data, skipping"
-        logger.warning(warning_msg)
-        return data
-    
-    filters = []
-    
-    for operator, value in conditions.items():
-        try:
-            if operator == "eq":
-                filters.append(pl.col(column) == value)
-            elif operator == "ne":
-                filters.append(pl.col(column) != value)
-            elif operator == "gt":
-                filters.append(pl.col(column) > value)
-            elif operator == "lt":
-                filters.append(pl.col(column) < value)
-            elif operator == "gte":
-                filters.append(pl.col(column) >= value)
-            elif operator == "lte":
-                filters.append(pl.col(column) <= value)
-            elif operator == "contains":
-                filters.append(pl.col(column).str.contains(str(value), literal=True))
-            elif operator == "startswith":
-                filters.append(pl.col(column).str.starts_with(str(value)))
-            elif operator == "endswith":
-                filters.append(pl.col(column).str.ends_with(str(value)))
-            elif operator == "in":
-                if isinstance(value, (list, tuple)):
-                    filters.append(pl.col(column).is_in(value))
-                else:
-                    logger.warning(f"'in' operator requires list/tuple value, got {type(value)}")
-                    continue
-            elif operator == "not_in":
-                if isinstance(value, (list, tuple)):
-                    filters.append(~pl.col(column).is_in(value))
-                else:
-                    logger.warning(f"'not_in' operator requires list/tuple value, got {type(value)}")
-                    continue
-            elif operator == "between":
-                if isinstance(value, (list, tuple)) and len(value) == 2:
-                    filters.append((pl.col(column) >= value[0]) & (pl.col(column) <= value[1]))
-                else:
-                    logger.warning(f"'between' operator requires list/tuple of 2 values, got {value}")
-                    continue
-            elif operator == "is_null":
-                if value:
-                    filters.append(pl.col(column).is_null())
-                else:
-                    filters.append(pl.col(column).is_not_null())
-            else:
-                logger.warning(f"Unknown operator '{operator}' for column '{column}', skipping")
-                continue
-            
-            logger.info(f"Added polars filter: {column} {operator} {value}")
-            
-        except Exception as e:
-            logger.warning(f"Failed to create polars filter {column} {operator} {value}: {str(e)}")
-            continue
-    
-    # Apply all filters
-    if filters:
-        combined_filter = filters[0]
-        for f in filters[1:]:
-            combined_filter = combined_filter & f
-        
-        filtered_data = data.filter(combined_filter)
-        remaining_rows = _get_row_count(filtered_data)
-        logger.info(f"Applied {len(filters)} polars filters, remaining rows: {remaining_rows}")
-        return filtered_data
-    
-    return data
-
-
-def _apply_post_processing(data, keep_columns: List[str], drop_duplicates: bool, 
-                          sort_by: str, ascending: bool, engine: str, logger, result) -> Union[pd.DataFrame, pl.DataFrame, pl.LazyFrame]:
-    """Apply post-processing steps."""
-    # Keep only specified columns
-    if keep_columns:
-        if engine == "pandas":
-            available_columns = [col for col in keep_columns if col in data.columns]
-            missing_columns = [col for col in keep_columns if col not in data.columns]
-        else:  # polars
-            columns = data.columns if hasattr(data, 'columns') else data.collect_schema().names()
-            available_columns = [col for col in keep_columns if col in columns]
-            missing_columns = [col for col in keep_columns if col not in columns]
-        
-        if missing_columns:
-            warning_msg = f"Requested columns not found: {missing_columns}"
-            logger.warning(warning_msg)
-            result.add_warning(warning_msg)
-        
-        if available_columns:
-            if engine == "pandas":
-                data = data[available_columns]
-            else:  # polars
-                data = data.select(available_columns)
-            logger.info(f"Kept columns: {available_columns}")
-    
-    # Remove duplicates
-    if drop_duplicates:
-        before_dedup = _get_row_count(data)
-        if engine == "pandas":
-            data = data.drop_duplicates()
-        else:  # polars
-            data = data.unique()
-        after_dedup = _get_row_count(data)
-        if before_dedup != after_dedup:
-            logger.info(f"Removed {before_dedup - after_dedup} duplicate rows")
-    
-    # Sort if requested
-    if sort_by:
-        columns = data.columns if hasattr(data, 'columns') else data.collect_schema().names()
-        if sort_by in columns:
-            try:
-                if engine == "pandas":
-                    data = data.sort_values(by=sort_by, ascending=ascending)
-                else:  # polars
-                    data = data.sort(sort_by, descending=not ascending)
-                logger.info(f"Sorted by column: {sort_by} ({'ascending' if ascending else 'descending'})")
-            except Exception as e:
-                warning_msg = f"Failed to sort by '{sort_by}': {e}"
-                logger.warning(warning_msg)
-                result.add_warning(warning_msg)
-        else:
-            warning_msg = f"Sort column '{sort_by}' not found in data"
-            logger.warning(warning_msg)
-            result.add_warning(warning_msg)
-    
-    return data
-
-
-def _is_valid_dataframe(data, engine: str) -> bool:
-    """Check if data is valid for the specified engine."""
+def _is_valid_dataframe(data: Any, engine: str) -> bool:
+    """Check if data is valid for engine."""
     if engine == "pandas":
         return isinstance(data, pd.DataFrame)
-    else:  # polars
+    elif engine == "polars":
         try:
             import polars as pl
             return isinstance(data, (pl.DataFrame, pl.LazyFrame))
         except ImportError:
             return False
+    # elif engine == "dask": return isinstance(data, dd.DataFrame)
+    return False
 
 
-def _is_empty_dataframe(data, engine: str) -> bool:
+def _is_empty(data: Any, engine: str) -> bool:
     """Check if dataframe is empty."""
+    if data is None:
+        return True
+    
     if engine == "pandas":
         return data.empty
-    else:  # polars
-        if hasattr(data, 'height'):  # DataFrame
-            return data.height == 0
-        else:  # LazyFrame
-            return data.collect().height == 0
+    elif engine == "polars":
+        return data.height == 0 if hasattr(data, 'height') else data.collect().height == 0
+    # elif engine == "dask": return len(data) == 0
+    return True
 
 
-def _get_row_count(data) -> int:
-    """Get row count for pandas or polars dataframe."""
-    if isinstance(data, pd.DataFrame):
+def _get_rows(data: Any, engine: str) -> int:
+    """Get row count."""
+    if data is None:
+        return 0
+    
+    if engine == "pandas":
         return len(data)
-    elif hasattr(data, 'height'):  # polars DataFrame
-        return data.height
-    elif hasattr(data, 'collect'):  # polars LazyFrame
-        return data.collect().height
-    else:
-        return 0
+    elif engine == "polars":
+        return data.height if hasattr(data, 'height') else data.collect().height
+    # elif engine == "dask": return len(data)
+    return 0
 
 
-def _get_column_count(data) -> int:
-    """Get column count for pandas or polars dataframe."""
-    if isinstance(data, pd.DataFrame):
-        return len(data.columns)
-    elif hasattr(data, 'width'):  # polars DataFrame
-        return data.width
-    elif hasattr(data, 'collect'):  # polars LazyFrame
-        return data.collect().width
-    else:
-        return 0
+def _create_filter_mask(data: Any, conditions: Dict[str, Any], custom_funcs: Dict[str, Any], engine: str, logger):
+    """Create boolean mask for filtering."""
+    evaluator = get_expression_evaluator(logger)
+    if custom_funcs:
+        evaluator.register_functions(custom_funcs)
+        logger.debug(f"Registered {len(custom_funcs)} custom functions")
+    
+    if engine == "pandas":
+        mask = pd.Series([True] * len(data), index=data.index)
+        
+        # Apply operator filters
+        for column, conds in conditions.get("operators", {}).items():
+            if column in data.columns:
+                for op, val in conds.items():
+                    column_mask = _apply_pandas_operator(data, column, op, val, logger)
+                    mask = mask & column_mask
+        
+        # Apply custom expressions
+        for expr in conditions.get("custom_expressions", []):
+            try:
+                expr_result = evaluator.evaluate_filter(data, expr, "pandas")
+                if isinstance(expr_result, pd.DataFrame):
+                    expr_mask = data.index.isin(expr_result.index)
+                else:
+                    expr_mask = expr_result
+                mask = mask & expr_mask
+                logger.info(f"Applied custom expression: {expr[:30]}...")
+            except Exception as e:
+                logger.error(f"Failed to apply expression '{expr}': {e}")
+                raise
+        
+        return mask
+    
+    elif engine == "polars":
+        mask_conditions = []
+        
+        # Apply operator filters
+        for column, conds in conditions.get("operators", {}).items():
+            cols = data.columns if hasattr(data, 'columns') else data.collect_schema().names()
+            if column in cols:
+                for op, val in conds.items():
+                    mask_conditions.append(_apply_polars_operator(column, op, val, logger))
+        
+        # Apply custom expressions
+        for expr in conditions.get("custom_expressions", []):
+            try:
+                expr_result = evaluator.evaluate_filter(data, expr, "polars")
+                mask_conditions.append(expr_result)
+                logger.info(f"Applied custom expression: {expr[:30]}...")
+            except Exception as e:
+                logger.error(f"Failed to apply expression '{expr}': {e}")
+                raise
+        
+        # Combine all conditions with AND
+        if mask_conditions:
+            combined_mask = mask_conditions[0]
+            for condition in mask_conditions[1:]:
+                combined_mask = combined_mask & condition
+            return combined_mask
+        else:
+            return pl.lit(True)
+    
+    # elif engine == "dask": return _create_dask_mask(data, conditions, evaluator, logger)
+    raise ValueError(f"Mask creation not implemented for engine: {engine}")
+
+
+def _apply_pandas_operator(data: pd.DataFrame, column: str, operator: str, value: Any, logger) -> pd.Series:
+    """Apply pandas operator."""
+    try:
+        if operator == "eq": 
+            return data[column] == value
+        elif operator == "ne": 
+            return data[column] != value
+        elif operator == "gt": 
+            return pd.to_numeric(data[column], errors='coerce') > value
+        elif operator == "lt": 
+            return pd.to_numeric(data[column], errors='coerce') < value
+        elif operator == "gte": 
+            return pd.to_numeric(data[column], errors='coerce') >= value
+        elif operator == "lte": 
+            return pd.to_numeric(data[column], errors='coerce') <= value
+        elif operator == "contains": 
+            return data[column].astype(str).str.contains(str(value), na=False, regex=False)
+        elif operator == "startswith": 
+            return data[column].astype(str).str.startswith(str(value), na=False)
+        elif operator == "endswith": 
+            return data[column].astype(str).str.endswith(str(value), na=False)
+        elif operator == "in": 
+            return data[column].isin(value) if isinstance(value, (list, tuple)) else pd.Series([False] * len(data))
+        elif operator == "not_in":
+            return ~data[column].isin(value) if isinstance(value, (list, tuple)) else pd.Series([True] * len(data))
+        elif operator == "between":
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                numeric = pd.to_numeric(data[column], errors='coerce')
+                return (numeric >= value[0]) & (numeric <= value[1])
+        elif operator == "is_null": 
+            return data[column].isna() if value else data[column].notna()
+        else:
+            logger.warning(f"Unknown operator: {operator}")
+            return pd.Series([True] * len(data))
+    except Exception as e:
+        logger.warning(f"Error applying {operator}: {e}")
+        return pd.Series([True] * len(data))
+
+
+def _apply_polars_operator(column: str, operator: str, value: Any, logger):
+    """Apply polars operator."""
+    try:
+        if operator == "eq": 
+            return pl.col(column) == value
+        elif operator == "ne": 
+            return pl.col(column) != value
+        elif operator == "gt": 
+            return pl.col(column) > value
+        elif operator == "lt": 
+            return pl.col(column) < value
+        elif operator == "gte": 
+            return pl.col(column) >= value
+        elif operator == "lte": 
+            return pl.col(column) <= value
+        elif operator == "contains": 
+            return pl.col(column).cast(pl.Utf8).str.contains(str(value))
+        elif operator == "startswith": 
+            return pl.col(column).cast(pl.Utf8).str.starts_with(str(value))
+        elif operator == "endswith": 
+            return pl.col(column).cast(pl.Utf8).str.ends_with(str(value))
+        elif operator == "in": 
+            return pl.col(column).is_in(value) if isinstance(value, (list, tuple)) else pl.lit(False)
+        elif operator == "not_in": 
+            return ~pl.col(column).is_in(value) if isinstance(value, (list, tuple)) else pl.lit(True)
+        elif operator == "between":
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                return pl.col(column).is_between(value[0], value[1])
+        elif operator == "is_null": 
+            return pl.col(column).is_null() if value else pl.col(column).is_not_null()
+        else:
+            logger.warning(f"Unknown operator: {operator}")
+            return pl.lit(True)
+    except Exception as e:
+        logger.warning(f"Error applying {operator}: {e}")
+        return pl.lit(True)
+
+
+def _apply_mask(data: Any, mask: Any, engine: str) -> Any:
+    """Apply boolean mask to data."""
+    if engine == "pandas":
+        return data[mask].copy()
+    elif engine == "polars":
+        return data.filter(mask)
+    # elif engine == "dask": return data[mask]
+    raise ValueError(f"Mask application not implemented for engine: {engine}")
+
+
+def _invert_mask(mask: Any, engine: str) -> Any:
+    """Invert boolean mask."""
+    if engine == "pandas":
+        return ~mask
+    elif engine == "polars":
+        return ~mask
+    # elif engine == "dask": return ~mask
+    return mask
+
+
+def _add_flag_column(data: Any, mask: Any, reject_column: str, engine: str) -> Any:
+    """Add reject flag column."""
+    if engine == "pandas":
+        result = data.copy()
+        result[reject_column] = ~mask
+        return result
+    elif engine == "polars":
+        return data.with_columns((~mask).alias(reject_column))
+    # elif engine == "dask": return data.assign(**{reject_column: ~mask})
+    raise ValueError(f"Flag column not implemented for engine: {engine}")
+
+
+def _count_rejected_in_mask(mask: Any, engine: str) -> int:
+    """Count rejected rows from mask."""
+    if engine == "pandas":
+        return int((~mask).sum())
+    elif engine == "polars":
+        return int((~mask).sum()) if hasattr(mask, 'sum') else 0
+    # elif engine == "dask": return int((~mask).sum())
+    return 0
+
+
+def _add_metrics(result: ModResult, original: int, filtered: int, rejected: int, rate: float, mode: str, engine: str):
+    """Add metrics and globals to result."""
+    result.add_metric("original_rows", original)
+    result.add_metric("filtered_rows", filtered)
+    result.add_metric("rejected_rows", rejected)
+    result.add_metric("rows_removed", original - filtered)
+    result.add_metric("filter_rate", round(rate, 4))
+    result.add_metric("reject_mode_used", mode)
+    result.add_metric("engine_used", engine)
+    
+    result.add_global("filtered_rows", filtered)
+    result.add_global("original_rows", original)
+    result.add_global("rejected_rows", rejected)
+    result.add_global("filter_rate", round(rate, 4))
