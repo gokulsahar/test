@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "created": "2024-08-22",
     "description": "DataPy Central Mod Registry",
-    "last_updated": "2025-09-02T07:29:58.446094"
+    "last_updated": "2025-09-23T19:24:35.525815"
   },
   "mods": {
     "csv_reader": {
@@ -284,6 +284,458 @@
         }
       },
       "registered_at": "2025-09-02T07:29:58.446087"
+    },
+    "data_filterer": {
+      "module_path": "datapy.mods.basics.data_filterer",
+      "type": "data_filterer",
+      "version": "2.0.0",
+      "description": "Advanced data filtering with reject modes, custom expressions and standard operators",
+      "category": "transformer",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [
+        "filtered_data",
+        "rejected_data"
+      ],
+      "globals": [
+        "filtered_rows",
+        "original_rows",
+        "filter_rate",
+        "rejected_rows"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Input DataFrame to filter (pandas or polars)"
+          },
+          "filter_conditions": {
+            "type": "dict",
+            "description": "Enhanced filter configuration with operators and/or custom expressions"
+          }
+        },
+        "optional": {
+          "engine": {
+            "type": "str",
+            "default": "pandas",
+            "description": "Processing engine: 'pandas', 'polars'",
+            "enum": [
+              "pandas",
+              "polars"
+            ]
+          },
+          "reject_mode": {
+            "type": "str",
+            "default": "drop",
+            "description": "How to handle rejected rows: 'drop', 'flag', 'separate'",
+            "enum": [
+              "drop",
+              "flag",
+              "separate"
+            ]
+          },
+          "reject_column": {
+            "type": "str",
+            "default": "_filter_rejected",
+            "description": "Column name for flagging rejected rows (used with 'flag' mode)"
+          },
+          "custom_functions": {
+            "type": "dict",
+            "default": {},
+            "description": "Custom functions for expressions {name: function_or_import_path}"
+          }
+        }
+      },
+      "registered_at": "2025-09-22T08:13:46.033191"
+    },
+    "file_reader": {
+      "module_path": "datapy.mods.basics.file_reader",
+      "type": "file_reader",
+      "version": "1.0.0",
+      "description": "ETL-focused reader for CSV, Parquet, and Arrow files with comprehensive data pipeline features",
+      "category": "source",
+      "input_ports": [],
+      "output_ports": [
+        "data"
+      ],
+      "globals": [
+        "row_count",
+        "column_count",
+        "file_size",
+        "engine_used"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "chardet>=5.0.0",
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "file_path": {
+            "type": "str",
+            "description": "Path to file to read (CSV, Parquet, or Arrow format)"
+          }
+        },
+        "optional": {
+          "engine": {
+            "type": "str",
+            "default": "pandas",
+            "description": "Processing engine: 'pandas' or 'polars'"
+          },
+          "encoding": {
+            "type": "str",
+            "default": "auto",
+            "description": "File encoding (auto, utf-8, latin-1, etc.) - auto uses detection"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "Field separator character"
+          },
+          "row_separator": {
+            "type": "str",
+            "default": "\n",
+            "description": "Line ending character (\\n, \\r\\n, \\r)"
+          },
+          "header_rows": {
+            "type": "int",
+            "default": 1,
+            "description": "Number of header rows (0=no headers, 1=single header)"
+          },
+          "footer_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of footer rows to skip from end of file"
+          },
+          "skip_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of rows to skip at start of file (before headers)"
+          },
+          "csv_options": {
+            "type": "bool",
+            "default": true,
+            "description": "Enable CSV-specific handling (quotes, escaping)"
+          },
+          "text_enclosure": {
+            "type": "str",
+            "default": "\"",
+            "description": "Quote character for text fields"
+          },
+          "escape_char": {
+            "type": "str",
+            "default": "\\",
+            "description": "Escape character for special characters"
+          },
+          "skip_empty_rows": {
+            "type": "bool",
+            "default": true,
+            "description": "Skip blank/empty rows during processing"
+          },
+          "column_mapping": {
+            "type": "dict",
+            "default": {},
+            "description": "Dictionary to rename columns: {'old_name': 'new_name'}"
+          },
+          "date_columns": {
+            "type": "list",
+            "default": [],
+            "description": "List of columns to parse as dates"
+          },
+          "numeric_columns": {
+            "type": "list",
+            "default": [],
+            "description": "List of columns to force as numeric types"
+          },
+          "trim_columns": {
+            "type": "str",
+            "default": "none",
+            "description": "Trim whitespace: 'none', 'all', or 'auto' (trim if detected)"
+          },
+          "streaming": {
+            "type": "bool",
+            "default": false,
+            "description": "Enable streaming/lazy evaluation for large files (Polars only)"
+          }
+        }
+      },
+      "registered_at": "2025-09-22T08:14:01.352615"
+    },
+    "file_writer": {
+      "module_path": "datapy.mods.basics.file_writer",
+      "type": "file_writer",
+      "version": "1.0.0",
+      "description": "ETL-focused writer for CSV, Parquet, and Arrow files with comprehensive data pipeline features",
+      "category": "sink",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [],
+      "globals": [
+        "rows_written",
+        "files_created",
+        "file_size",
+        "engine_used"
+      ],
+      "packages": [
+        "pandas>=1.5.0",
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "file_path": {
+            "type": "str",
+            "description": "Path to output file (CSV, Parquet, or Arrow format)"
+          }
+        },
+        "optional": {
+          "engine": {
+            "type": "str",
+            "default": "pandas",
+            "description": "Processing engine: 'pandas' or 'polars'"
+          },
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding (utf-8, latin-1, etc.)"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "Field separator character"
+          },
+          "row_separator": {
+            "type": "str",
+            "default": "\n",
+            "description": "Line ending character (\\n, \\r\\n, \\r)"
+          },
+          "csv_options": {
+            "type": "bool",
+            "default": true,
+            "description": "Enable CSV-specific handling (quotes, escaping)"
+          },
+          "text_enclosure": {
+            "type": "str",
+            "default": "\"",
+            "description": "Quote character for text fields"
+          },
+          "escape_char": {
+            "type": "str",
+            "default": "\\",
+            "description": "Escape character for special characters"
+          },
+          "append_mode": {
+            "type": "bool",
+            "default": false,
+            "description": "Append to existing file instead of overwriting"
+          },
+          "include_header": {
+            "type": "bool",
+            "default": true,
+            "description": "Include column headers in output file"
+          },
+          "create_directories": {
+            "type": "bool",
+            "default": true,
+            "description": "Create parent directories if they don't exist"
+          },
+          "overwrite_existing": {
+            "type": "bool",
+            "default": true,
+            "description": "Overwrite existing files (False will raise error if file exists)"
+          }
+        }
+      },
+      "registered_at": "2025-09-22T08:14:07.614941"
+    },
+    "file_input": {
+      "module_path": "datapy.mods.polars.file_input",
+      "type": "file_input",
+      "version": "1.0.0",
+      "description": "Universal file reader with lazy/streaming Polars for memory-efficient ETL processing",
+      "category": "file_ops",
+      "input_ports": [],
+      "output_ports": [
+        "data"
+      ],
+      "globals": [
+        "row_count",
+        "column_count",
+        "file_size",
+        "file_format"
+      ],
+      "packages": [
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "file_path": {
+            "type": "str",
+            "description": "Path to file to read (CSV or Parquet format)"
+          }
+        },
+        "optional": {
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding for CSV files"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "Field separator character for CSV"
+          },
+          "row_separator": {
+            "type": "str",
+            "default": "\n",
+            "description": "Line ending character"
+          },
+          "header_rows": {
+            "type": "int",
+            "default": 1,
+            "description": "Number of header rows (0=no headers, 1=single header)"
+          },
+          "footer_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of footer rows to skip from end"
+          },
+          "skip_rows": {
+            "type": "int",
+            "default": 0,
+            "description": "Number of rows to skip at start (before headers)"
+          },
+          "read_options": {
+            "type": "dict",
+            "default": {},
+            "description": "Additional Polars read parameters to override defaults"
+          }
+        }
+      },
+      "registered_at": "2025-09-23T19:24:22.337474"
+    },
+    "file_output": {
+      "module_path": "datapy.mods.polars.file_output",
+      "type": "file_output",
+      "version": "1.0.0",
+      "description": "Universal file writer with lazy/streaming Polars for memory-efficient ETL processing",
+      "category": "file_ops",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [],
+      "globals": [
+        "rows_written",
+        "file_size",
+        "file_format",
+        "write_mode"
+      ],
+      "packages": [
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Lazy DataFrame to write to file"
+          },
+          "output_path": {
+            "type": "str",
+            "description": "Path to output file (CSV or Parquet format)"
+          }
+        },
+        "optional": {
+          "append_mode": {
+            "type": "bool",
+            "default": false,
+            "description": "Append to existing file instead of overwriting (with schema validation)"
+          },
+          "encoding": {
+            "type": "str",
+            "default": "utf-8",
+            "description": "File encoding for text formats"
+          },
+          "delimiter": {
+            "type": "str",
+            "default": ",",
+            "description": "Field separator character for CSV"
+          },
+          "include_header": {
+            "type": "bool",
+            "default": true,
+            "description": "Include column headers in output file"
+          },
+          "write_options": {
+            "type": "dict",
+            "default": {},
+            "description": "Additional Polars write parameters (compression, row_separator, text_enclosure, etc.)"
+          }
+        }
+      },
+      "registered_at": "2025-09-23T19:24:28.450258"
+    },
+    "data_filter": {
+      "module_path": "datapy.mods.polars.data_filter",
+      "type": "data_filter",
+      "version": "1.0.0",
+      "description": "Production-ready row filtering with Talend feature parity and secure custom functions",
+      "category": "transforms",
+      "input_ports": [
+        "data"
+      ],
+      "output_ports": [
+        "filtered_data",
+        "rejected_data"
+      ],
+      "globals": [
+        "filtered_rows",
+        "rejected_rows",
+        "filter_rate",
+        "conditions_applied"
+      ],
+      "packages": [
+        "polars>=0.20.0"
+      ],
+      "config_schema": {
+        "required": {
+          "data": {
+            "type": "object",
+            "description": "Lazy DataFrame to filter"
+          },
+          "filter_conditions": {
+            "type": "dict",
+            "description": "Standard filtering conditions {column: {operator: value}}"
+          }
+        },
+        "optional": {
+          "output_reject": {
+            "type": "bool",
+            "default": false,
+            "description": "Enable reject output for rows that fail filters"
+          },
+          "condition_logic": {
+            "type": "str",
+            "default": "AND",
+            "description": "Logic between conditions: 'AND' or 'OR'"
+          },
+          "null_handling": {
+            "type": "str",
+            "default": "exclude",
+            "description": "How to treat nulls: 'include', 'exclude', 'as_false'"
+          },
+          "custom_functions": {
+            "type": "dict",
+            "default": {},
+            "description": "Custom filter functions: {function_name: callable_function}"
+          }
+        }
+      },
+      "registered_at": "2025-09-23T19:24:35.525800"
     }
   }
 }
