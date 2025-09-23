@@ -1,0 +1,84 @@
+# DataPy ETL Framework - Mod System Context & Specifications
+
+## Document Overview
+**Version**: 1.0.0  
+**Date**: September 2025  
+**Purpose**: Context document for implementing DataPy ETL mod system with Polars/DuckDB architecture
+
+---
+
+## 🏗️ Core Architecture Philosophy
+
+### Memory Efficiency & Performance Strategy
+- **Lazy + Streaming First**: All operations return lazy DataFrames, process in chunks
+- **Smart Engine Selection**: Polars for <1GB + transformations, DuckDB for >1GB + SQL operations  
+- **Automatic Disk Offloading**: Spill to disk when memory thresholds exceeded
+- **Zero-Copy Operations**: Minimize data duplication across pipeline
+- **≤200 LOC per mod**: Clean, focused, modular implementations
+
+### Framework Integration
+- **DataPy Compatible**: Use existing ModResult, ConfigSchema, registry patterns
+- **Polars + DuckDB Only**: No pandas, pure modern data stack
+- **Streaming by Default**: Handle datasets larger than memory seamlessly
+- **Talend Feature Parity**: Match or exceed Talend component capabilities
+
+---
+
+## 📋 Complete Mod Catalog (15 Mods)
+
+### **📁 Category: `file_ops`** (4 mods)
+1. **`file_input`** - Universal reader (CSV/Parquet/Arrow/JSON/Excel) with streaming, compression, encoding detection, schema inference
+2. **`file_output`** - Universal writer with compression, partitioning, atomic writes, large file splitting
+3. **`file_list`** - Directory scanner with pattern matching, metadata extraction, sorting, filtering
+4. **`file_ops`** - File system operations (copy/move/delete/mkdir) with batch mode, safety features
+
+### **⚙️ Category: `transforms`** (11 mods)
+5. **`data_filter`** - Row filtering with complex conditions, AND/OR logic, regex, statistical filters, null handling
+6. **`data_mapper`** - Column operations (select/drop/rename/reorder/cast) with pattern matching, schema validation
+7. **`data_expression`** - Calculated fields with math/string/date functions, hashing (SHA-256), conditional logic, JSON parsing
+8. **`data_join`** - All join types with multiple keys, fuzzy matching, range joins, memory management, disk spill
+9. **`data_aggregator`** - GROUP BY with all aggregation functions, multiple grouping sets, having clauses, window functions
+10. **`data_sort`** - Multi-column sorting with custom ordering, null positioning, memory-efficient external sort
+11. **`data_union`** - Row stacking with schema alignment, duplicate handling, multiple dataset combining
+12. **`data_distinct`** - Deduplication with column selection, keep first/last options, hash-based efficiency
+13. **`data_splitter`** - Conditional row splitting into multiple outputs with complex routing logic
+14. **`data_validate`** - Data quality checks, schema validation, constraint checking, statistical validation
+15. **`data_norm_denorm`** - Structure transformations (pivot/unpivot/explode/nest) with dynamic schema handling
+
+---
+
+## 🎯 Implementation Priorities
+
+### **Phase 1 - Core Pipeline** (Essential 5)
+`file_input` → `data_filter` → `data_mapper` → `data_expression` → `file_output`
+
+### **Phase 2 - Data Operations** (Essential 5) 
+`data_join` → `data_aggregator` → `data_sort` → `data_union` → `data_distinct`
+
+### **Phase 3 - Advanced Features** (Remaining 5)
+`data_splitter` → `data_validate` → `file_list` → `file_ops` → `data_norm_denorm`
+
+---
+
+## 🔧 Technical Implementation Context
+
+### Key Requirements
+- **Memory Limits**: Max 2GB RAM per mod, automatic spill-to-disk
+- **Performance Targets**: <1s for small files, linear scaling for large files
+- **Error Handling**: Comprehensive error modes (skip/collect/fail-fast)
+- **Lazy Evaluation**: Chain operations without materialization until output
+- **Feature Completeness**: Match/exceed Talend component capabilities
+
+### Architecture Notes
+- Each mod must handle datasets from KB to TB size ranges
+- Automatic engine switching based on data size and operation type  
+- Streaming processing for memory efficiency
+- Disk-based operations when memory constraints hit
+- Full Talend feature parity with modern performance optimizations
+
+---
+
+## 💡 Usage Context
+This system replaces traditional ETL tools (Talend/Informatica) with a modern Python-based approach using cutting-edge data processing engines (Polars/DuckDB) while maintaining the familiar component-based ETL paradigm that data engineers expect.
+
+**Next Step**: Use this context to implement individual mods following DataPy framework patterns with full Polars/DuckDB integration.
