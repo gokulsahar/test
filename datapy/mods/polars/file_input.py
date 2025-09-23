@@ -2,12 +2,10 @@
 Universal File Input Mod for DataPy Framework.
 
 Reads CSV and Parquet files with lazy/streaming Polars approach.
-Designed for memory-efficient ETL processing with automatic spill-to-disk capabilities.
-Extensible architecture for future format support.
 """
 
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any
 import polars as pl
 import os
 
@@ -36,11 +34,6 @@ CONFIG_SCHEMA = ConfigSchema(
         }
     },
     optional={
-        "encoding": {
-            "type": "str",
-            "default": "utf-8",
-            "description": "File encoding for CSV files"
-        },
         "delimiter": {
             "type": "str",
             "default": ",",
@@ -56,12 +49,11 @@ CONFIG_SCHEMA = ConfigSchema(
             "default": 1, 
             "description": "Number of header rows (0=no headers, 1=single header)"
         },
-        "footer_rows": {
-            "type": "int",
-            "default": 0,
-            "description": "Number of footer rows to skip from end"
-        },
-        "skip_rows": {
+        "eager_row_count": {
+            "type": "bool",
+            "default": False,
+            "description": "If True, computes total row count eagerly (cheap count-only collect)."
+        },"skip_rows": {
             "type": "int",
             "default": 0,
             "description": "Number of rows to skip at start (before headers)"
@@ -91,6 +83,7 @@ def _detect_file_format(file_path: str) -> str:
         '.csv': 'csv',
         '.tsv': 'csv',
         '.txt': 'csv',
+        ".dat": "csv",
         '.parquet': 'parquet',
         '.pq': 'parquet'
     }
@@ -101,56 +94,38 @@ def _detect_file_format(file_path: str) -> str:
 
 def _read_csv_lazy(file_path: str, params: Dict[str, Any], logger) -> pl.LazyFrame:
     """
-    Read CSV file using Polars lazy evaluation with ETL optimizations.
-    
-    Args:
-        file_path: Path to CSV file
-        params: Processing parameters
-        logger: Logger instance
-        
-    Returns:
-        Polars LazyFrame for memory-efficient processing
+    Read CSV file using Polars lazy evaluation with ETL-friendly defaults.
     """
-    encoding = params.get("encoding", "utf-8")
     delimiter = params.get("delimiter", ",")
     row_separator = params.get("row_separator", "\n")
     header_rows = params.get("header_rows", 1)
     skip_rows = params.get("skip_rows", 0)
-    footer_rows = params.get("footer_rows", 0)
     read_options = params.get("read_options", {})
-    
-    # Configure Polars CSV reading with optimal ETL performance - ONLY VALID PARAMETERS
+
     read_params = {
         "separator": delimiter,
         "skip_rows": skip_rows,
         "has_header": header_rows > 0,
-        "encoding": encoding if encoding != "utf-8" else "utf8",  # Convert to Polars format
-        "infer_schema": True,  # Schema inference for efficiency
-        "ignore_errors": False,  # Fail fast for data quality
+        "encoding": "utf8",
+        "ignore_errors": False,
         "null_values": ["", "NULL", "null", "None", "NA"],
-        # CSV-specific options enabled by default
         "quote_char": '"',
         "skip_rows_after_header": 0,
         "eol_char": row_separator,
-        # Optimal ETL performance settings
-        "rechunk": True,  # Single chunk for better memory layout
-        "truncate_ragged_lines": True,  # Handle real-world dirty data
+        "truncate_ragged_lines": True,
+        # Controls how many rows Polars scans to infer dtypes; adjust as needed.
+        # If user overrides via read_options, their value will win.
+        "infer_schema_length": 100,
     }
-    
-    # Allow user overrides for advanced use cases
+
+    # Allow user overrides for advanced cases
     read_params.update(read_options)
+
+    logger.info(
+        f"Reading CSV with lazy scan and user overrides: {len(read_options)} custom options"
+    )
     
-    logger.info(f"Reading CSV with optimal ETL settings + user overrides: {len(read_options)} custom options")
-    
-    # Use scan_csv for lazy evaluation - no data loaded into memory yet
     lazy_df = pl.scan_csv(file_path, **read_params)
-    
-    # Handle footer rows by limiting the scan (if needed)
-    if footer_rows > 0:
-        # For footer handling, we need to calculate total rows
-        # This is a limitation - we'll log a warning for now
-        logger.warning(f"Footer row handling ({footer_rows}) may require materialization")
-        
     return lazy_df
 
 
@@ -167,7 +142,6 @@ def _read_parquet_lazy(file_path: str, params: Dict[str, Any], logger) -> pl.Laz
         Polars LazyFrame for memory-efficient processing
     """
     skip_rows = params.get("skip_rows", 0)
-    footer_rows = params.get("footer_rows", 0)
     read_options = params.get("read_options", {})
     
     logger.info(f"Reading Parquet with optimal lazy evaluation and parallel I/O")
@@ -179,9 +153,6 @@ def _read_parquet_lazy(file_path: str, params: Dict[str, Any], logger) -> pl.Laz
     if skip_rows > 0:
         lazy_df = lazy_df.slice(skip_rows)
         
-    if footer_rows > 0:
-        logger.warning(f"Footer row handling ({footer_rows}) may require materialization for Parquet")
-    
     return lazy_df
 
 
@@ -288,11 +259,29 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         
         logger.info(f"Lazy DataFrame created and validated successfully", extra={
             "columns": column_count,
-            "schema": {col: str(dtype) for col, dtype in schema.items()}
+            "schema": {str(col): str(dtype) for col, dtype in dict(schema).items()}
         })
         
+        # Optional eager row count: runs a count-only plan (does not read all columns)
+        eager_row_count = params.get("eager_row_count", False)
+        
+        if eager_row_count:
+            try:
+                # count-only physical plan; streaming optimization may apply
+                row_count_val = (
+                    lazy_df.select(pl.len().alias("rows"))
+                    .collect(streaming=True)
+                    .to_series(0)
+                    .item()
+                )
+            except Exception as e:
+                logger.warning(f"Row count failed; falling back to lazy marker: {e}")
+                row_count_val = "lazy_evaluation"
+        else:
+            row_count_val = "lazy_evaluation"
+        
         # Add metrics (row count will be "lazy" since we don't materialize)
-        result.add_metric("row_count", "lazy_evaluation")
+        result.add_metric("row_count", row_count_val)
         result.add_metric("column_count", column_count)
         result.add_metric("file_size_bytes", file_size)
         result.add_metric("file_format", file_format)
@@ -305,7 +294,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         result.add_artifact("schema", schema)
         
         # Add globals for downstream mods
-        result.add_global("row_count", "lazy_evaluation") 
+        result.add_global("row_count", row_count_val) 
         result.add_global("column_count", column_count)
         result.add_global("file_size", file_size)
         result.add_global("file_format", file_format)
