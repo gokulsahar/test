@@ -50,7 +50,7 @@
 ## 🎯 Implementation Priorities
 
 ### **Phase 1 - Core Pipeline** (Essential 5)
-`file_input` → `data_filter` → `data_mapper` → `data_expression` → `file_output`
+`file_list -> file_input` → `data_filter` → `data_mapper` → `data_expression` → `file_output`
 
 ### **Phase 2 - Data Operations** (Essential 5) 
 `data_join` → `data_aggregator` → `data_sort` → `data_union` → `data_distinct`
@@ -63,10 +63,10 @@
 ## 🔧 Technical Implementation Context
 
 ### Key Requirements
-- **Memory Limits**: Max 2GB RAM per mod, automatic spill-to-disk
+- **Memory Limits**: Max 2GB RAM per mod, automatic spill-to-disk swirch to duckdb
 - **Performance Targets**: <1s for small files, linear scaling for large files
 - **Error Handling**: Comprehensive error modes (skip/collect/fail-fast)
-- **Lazy Evaluation**: Chain operations without materialization until output
+- **Lazy Evaluation**: Chain operations without materialization until output (most of the time output will be a LR file only) which will then be loaded to appropriate system later
 - **Feature Completeness**: Match/exceed Talend component capabilities
 
 ### Architecture Notes
