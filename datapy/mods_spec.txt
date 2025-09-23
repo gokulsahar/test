@@ -56,7 +56,7 @@
 `data_join` → `data_aggregator` → `data_sort` → `data_union` → `data_distinct`
 
 ### **Phase 3 - Advanced Features** (Remaining 5)
-`data_splitter` → `data_validate` → `file_list` → `file_ops` → `data_norm_denorm`
+`data_splitter` → `data_validate` → `file_list` → `data_norm_denorm`
 
 ---
 
@@ -80,5 +80,5 @@
 
 ## 💡 Usage Context
 This system replaces traditional ETL tools (Talend/Informatica) with a modern Python-based approach using cutting-edge data processing engines (Polars/DuckDB) while maintaining the familiar component-based ETL paradigm that data engineers expect.
-
+also ignore exsisting components/mod they were all pocs.
 **Next Step**: Use this context to implement individual mods following DataPy framework patterns with full Polars/DuckDB integration.
