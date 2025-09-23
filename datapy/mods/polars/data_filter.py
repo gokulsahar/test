@@ -2,11 +2,10 @@
 Data Filter Mod for DataPy Framework.
 
 Production-ready row filtering with Talend tFilter/tMap feature parity.
-Supports complex conditions, AND/OR logic, regex, statistical filters, null handling,
+Supports complex conditions, AND/OR logic, regex, null handling,
 and secure custom functions. Pure Polars lazy/streaming implementation.
 """
 
-from pathlib import Path
 from typing import Dict, Any, Union, Callable, List
 import polars as pl
 from functools import reduce
@@ -27,7 +26,7 @@ METADATA = ModMetadata(
     packages=["polars>=0.20.0"]
 )
 
-# Streamlined parameter schema - 6 parameters
+
 CONFIG_SCHEMA = ConfigSchema(
     required={
         "data": {
@@ -55,10 +54,10 @@ CONFIG_SCHEMA = ConfigSchema(
             "default": "exclude",
             "description": "How to treat nulls: 'include', 'exclude', 'as_false'"
         },
-        "filter_options": {
+        "custom_functions": {
             "type": "dict",
             "default": {},
-            "description": "Power user options: custom_functions and advanced settings"
+            "description": "Custom filter functions: {function_name: callable_function}"
         }
     }
 )
@@ -78,14 +77,6 @@ def _create_condition_expression(column: str, operator: str, value: Any, null_ha
         Polars expression for the condition
     """
     col_expr = pl.col(column)
-    
-    # Handle null treatment
-    if null_handling == "exclude":
-        base_condition = col_expr.is_not_null()
-    elif null_handling == "include":
-        base_condition = pl.lit(True)  # Include all, including nulls
-    else:  # as_false
-        base_condition = pl.lit(True)  # Will be handled in individual operators
     
     # Standard comparison operators
     if operator == "==":
@@ -135,10 +126,10 @@ def _create_condition_expression(column: str, operator: str, value: Any, null_ha
     else:
         raise ValueError(f"Unsupported operator: {operator}")
     
-    # Apply null handling
+    # Apply null handling for non-null operators
     if null_handling == "exclude" and operator not in ["is_null", "not_null"]:
-        condition = base_condition & condition
-    elif null_handling == "as_false":
+        condition = col_expr.is_not_null() & condition
+    elif null_handling == "as_false" and operator not in ["is_null", "not_null"]:
         condition = col_expr.is_not_null() & condition
     
     return condition
@@ -180,9 +171,6 @@ def _apply_custom_functions(data: pl.LazyFrame, custom_functions: Dict[str, Call
     return custom_expressions
 
 
-
-
-
 def run(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute data filtering with lazy/streaming Polars approach.
@@ -210,14 +198,14 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         output_reject = params.get("output_reject", False)
         condition_logic = params.get("condition_logic", "AND").upper()
         null_handling = params.get("null_handling", "exclude")
-        filter_options = params.get("filter_options", {})
+        custom_functions = params.get("custom_functions", {})
         
         logger.info(f"Starting data filter", extra={
             "condition_logic": condition_logic,
             "null_handling": null_handling,
             "output_reject": output_reject,
             "filter_conditions_count": len(filter_conditions),
-            "has_custom_functions": "custom_functions" in filter_options
+            "has_custom_functions": bool(custom_functions)
         })
         
         # Validate input data is lazy DataFrame
@@ -264,7 +252,6 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
                     return result.error()
         
         # Custom functions
-        custom_functions = filter_options.get("custom_functions", {})
         if custom_functions:
             try:
                 custom_exprs = _apply_custom_functions(data, custom_functions, logger)
