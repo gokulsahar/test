@@ -7,6 +7,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
 .Python
 build/
 develop-eggs/
@@ -148,3 +149,5 @@ config/local_*
 *.key
 *.pem
 *.cert
+
+basics/

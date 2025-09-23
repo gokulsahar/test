@@ -65,7 +65,7 @@ CONFIG_SCHEMA = ConfigSchema(
         "write_options": {
             "type": "dict",
             "default": {},
-            "description": "Additional Polars write parameters (compression, row_separator, text_enclosure, etc.)"
+            "description": "Additional Polars write parameters (compression, text_enclosure, etc.)"
         }
     }
 )
@@ -222,7 +222,7 @@ def _write_parquet_streaming(data: pl.LazyFrame, file_path: str, params: Dict[st
     return {
         "rows_written": "streaming_mode", 
         "file_size": file_size,
-        "columns_written": len(data.columns)
+        "columns_written": len(data.collect_schema().names())
     }
 
 

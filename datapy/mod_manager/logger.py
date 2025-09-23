@@ -130,31 +130,57 @@ class TabDelimitedFormatter(logging.Formatter):
                 stack_trace = ''.join(filtered_stack).strip()
                 extra_fields["stack_trace"] = stack_trace
         
-        # Convert extra fields to JSON string
-        if extra_fields:
-            extra_fields_str = json.dumps(extra_fields, default=str)
+        # For ERROR/WARNING: Use enhanced formatting with clean stack traces
+        if record.levelno >= logging.WARNING:
+            lines = []
+            lines.append("=" * 80)
+            lines.append(f"ERROR: {message}")
+            lines.append(f"Time: {timestamp} | Logger: {logger_name}")
+            if mod_type != '-' or mod_name != '-':
+                lines.append(f"Mod: {mod_type} | Name: {mod_name}")
+            
+            # Add clean stack trace if available
+            if "stack_trace" in extra_fields:
+                lines.append("Stack Trace:")
+                lines.append("-" * 40)
+                # Print clean stack trace (no JSON escaping)
+                lines.append(extra_fields["stack_trace"])
+                lines.append("-" * 40)
+            
+            # Add other extra fields if any (excluding stack_trace)
+            other_fields = {k: v for k, v in extra_fields.items() if k != "stack_trace"}
+            if other_fields:
+                lines.append(f"Additional Info: {json.dumps(other_fields, default=str)}")
+            
+            lines.append("=" * 80)
+            return '\n'.join(lines)
+        
+        # For other levels: Use standard tab-delimited format
         else:
-            extra_fields_str = '-'
-        
-        # Escape tabs and newlines in core fields
-        message = message.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-        logger_name = logger_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-        mod_type = mod_type.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-        mod_name = mod_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-        
-        # Build tab-delimited log entry
-        log_parts = [
-            timestamp,
-            level,
-            logger_name,
-            mod_type,
-            mod_name,
-            message,
-            extra_fields_str  # Stack trace will be in here
-        ]
-        
-        return '\t'.join(log_parts)
-
+            # Convert extra fields to JSON string
+            if extra_fields:
+                extra_fields_str = json.dumps(extra_fields, default=str)
+            else:
+                extra_fields_str = '-'
+            
+            # Escape tabs and newlines in core fields
+            message = message.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+            logger_name = logger_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+            mod_type = mod_type.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+            mod_name = mod_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+            
+            # Build tab-delimited log entry
+            log_parts = [
+                timestamp,
+                level,
+                logger_name,
+                mod_type,
+                mod_name,
+                message,
+                extra_fields_str
+            ]
+            
+            return '\t'.join(log_parts)
 
 def setup_console_logging(log_config: Dict[str, Any]) -> None:
     """

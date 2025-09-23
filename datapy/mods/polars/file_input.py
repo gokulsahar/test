@@ -119,12 +119,12 @@ def _read_csv_lazy(file_path: str, params: Dict[str, Any], logger) -> pl.LazyFra
     footer_rows = params.get("footer_rows", 0)
     read_options = params.get("read_options", {})
     
-    # Configure Polars CSV reading with optimal ETL performance
+    # Configure Polars CSV reading with optimal ETL performance - ONLY VALID PARAMETERS
     read_params = {
         "separator": delimiter,
         "skip_rows": skip_rows,
         "has_header": header_rows > 0,
-        "encoding": encoding,
+        "encoding": encoding if encoding != "utf-8" else "utf8",  # Convert to Polars format
         "infer_schema": True,  # Schema inference for efficiency
         "ignore_errors": False,  # Fail fast for data quality
         "null_values": ["", "NULL", "null", "None", "NA"],
@@ -134,7 +134,6 @@ def _read_csv_lazy(file_path: str, params: Dict[str, Any], logger) -> pl.LazyFra
         "eol_char": row_separator,
         # Optimal ETL performance settings
         "rechunk": True,  # Single chunk for better memory layout
-        "n_threads": None,  # Use all available cores
         "truncate_ragged_lines": True,  # Handle real-world dirty data
     }
     
@@ -261,7 +260,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
             return result.error()
         
         # Get basic schema info without materializing
-        schema = lazy_df.schema
+        schema = lazy_df.collect_schema()
         column_count = len(schema)
         
         # Validate we have columns
@@ -274,7 +273,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         # Quick validation check for empty data (minimal materialization)
         try:
             # Check if file has any data rows by limiting to just 1 row
-            first_row = lazy_df.limit(1).collect()
+            first_row = lazy_df.head(1).collect()
             if first_row.height == 0:
                 warning_msg = f"File appears to be empty (no data rows): {file_path}"
                 logger.warning(warning_msg)
@@ -312,6 +311,36 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         result.add_global("file_format", file_format)
         
         return result.success()
+        
+    except KeyError as e:
+        error_msg = f"Missing required parameter: {e}"
+        logger.error(error_msg)
+        result.add_error(error_msg)
+        return result.error()
+        
+    except PermissionError as e:
+        error_msg = f"Permission denied accessing file: {str(e)}"
+        logger.error(error_msg)
+        result.add_error(error_msg)
+        return result.error()
+        
+    except FileNotFoundError as e:
+        error_msg = f"File not found: {str(e)}"
+        logger.error(error_msg)
+        result.add_error(error_msg)
+        return result.error()
+        
+    except pl.ComputeError as e:
+        error_msg = f"Polars parsing error (check delimiter, encoding, quote chars): {str(e)}"
+        logger.error(error_msg)
+        result.add_error(error_msg)
+        return result.error()
+        
+    except pl.NoDataError as e:
+        error_msg = f"No data found in file: {str(e)}"
+        logger.error(error_msg)
+        result.add_error(error_msg)
+        return result.error()
         
     except ImportError as e:
         error_msg = f"Missing required dependency: {str(e)}"

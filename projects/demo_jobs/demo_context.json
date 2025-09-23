@@ -1,10 +1,10 @@
 {
   "data": {
-    "input_file": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/customers_large.csv",
-    "output_dir_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/pandas",
-    "output_dir_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/polars",
-    "output_file_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/pandas/customers_filtered_pandas.csv",
-    "output_file_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/polars/customers_filtered_polars.csv"
+    "input_file": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/data/customers_large.csv",
+    "output_dir_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/output/pandas",
+    "output_dir_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/output/polars",
+    "output_file_pandas": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/output/pandas/customers_filtered_pandas.csv",
+    "output_file_polars": "C:/Users/gokul/OneDrive/Documents/DataStageComps/test2/projects/demo_jobs/output/customers_filtered_polars.csv"
   },
   "processing": {
     "encoding": "utf-8",
@@ -18,6 +18,11 @@
     "min_income": 30000,
     "min_balance": 1000,
     "active_since_date": "2022-01-01"
+  },
+  "data_filter": {
+    "reject_mode": "drop",
+    "reject_column": "_filter_rejected",
+    "custom_functions": {}
   },
   "columns": {
     "keep_columns": [
@@ -39,5 +44,16 @@
   },
   "logging": {
     "log_level": "INFO"
+  },
+  "demo": {
+    "description": "DataPy Framework Demo - Pandas vs Polars Engine Comparison",
+    "target_data_reduction": "~50%",
+    "filter_criteria": {
+      "working_adults": "Age 25-65 years",
+      "minimum_income": "$30,000+ annual income", 
+      "active_accounts": "$1,000+ account balance",
+      "recent_customers": "Last purchase within 2 years"
+    },
+    "expected_output_size": "~1GB from 2GB input"
   }
 }
