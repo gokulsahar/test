@@ -1,23 +1,23 @@
+import duckdb
+import logging
+
+logger = logging.getLogger(__name__)
+
 try:
     # Create DuckDB connection (uses defaults: 80% RAM, all CPU cores)
     conn = duckdb.connect()
     
-    # Build the required fields list for SELECT clause
-    required_fields_str = ", ".join(required_fields)
-    
-    # Build COALESCE statements for null handling
-    coalesce_columns = []
-    for col in default_value_columns:
-        if col in required_fields:
-            coalesce_columns.append(f"COALESCE({col}, '{default_value}') AS {col}")
+    # Build column selection with null filling
+    select_columns = []
+    for col in required_fields:
+        if col in default_value_columns:
+            # Fill nulls with '#N/A' for specified columns
+            select_columns.append(f"COALESCE({col}, '#N/A') AS {col}")
         else:
-            coalesce_columns.append(col)
+            # Keep other columns as is
+            select_columns.append(col)
     
-    # If we have COALESCE columns, use them; otherwise use required_fields
-    if coalesce_columns:
-        select_clause = ", ".join(coalesce_columns)
-    else:
-        select_clause = required_fields_str
+    select_clause = ", ".join(select_columns)
     
     logger.info("Input file read and processed successfully using DuckDB")
     
@@ -33,13 +33,10 @@ try:
             delimiter='\t',
             header=true,
             ignore_errors=true,
-            sample_size=100000,
-            auto_detect=true
+            all_varchar=true
         )
     ) TO '{output_path}' 
-    (FORMAT 'parquet', 
-     COMPRESSION 'snappy',
-     ROW_GROUP_SIZE 10000)
+    (FORMAT 'parquet')
     """
     
     conn.execute(query)
