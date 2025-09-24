@@ -1,0 +1,54 @@
+try:
+    # Create DuckDB connection (uses defaults: 80% RAM, all CPU cores)
+    conn = duckdb.connect()
+    
+    # Build the required fields list for SELECT clause
+    required_fields_str = ", ".join(required_fields)
+    
+    # Build COALESCE statements for null handling
+    coalesce_columns = []
+    for col in default_value_columns:
+        if col in required_fields:
+            coalesce_columns.append(f"COALESCE({col}, '{default_value}') AS {col}")
+        else:
+            coalesce_columns.append(col)
+    
+    # If we have COALESCE columns, use them; otherwise use required_fields
+    if coalesce_columns:
+        select_clause = ", ".join(coalesce_columns)
+    else:
+        select_clause = required_fields_str
+    
+    logger.info("Input file read and processed successfully using DuckDB")
+    
+    # Prepare output path
+    output_path = f"{context['data']['output_path']}".replace(".CSV", ".parquet")
+    
+    # Execute the conversion in one statement with streaming processing
+    query = f"""
+    COPY (
+        SELECT {select_clause}
+        FROM read_csv(
+            '{cus_balance_file_path}',
+            delimiter='\t',
+            header=true,
+            ignore_errors=true,
+            sample_size=100000,
+            auto_detect=true
+        )
+    ) TO '{output_path}' 
+    (FORMAT 'parquet', 
+     COMPRESSION 'snappy',
+     ROW_GROUP_SIZE 10000)
+    """
+    
+    conn.execute(query)
+    
+    logger.info(f"Output file written successfully as Parquet: {output_path}")
+    
+    # Close connection
+    conn.close()
+    
+except Exception as e:
+    logger.error(f"Failed to process or write Parquet file: {e}", exc_info=True)
+    raise RuntimeError(f"Failed to process or write Parquet file: {e}")
