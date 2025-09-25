@@ -25,7 +25,6 @@ import polars as pl
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-
 def setup_pipeline():
     """Initialize logging and context for the pipeline."""
     logger = setup_logging("INFO", "polars_pipeline.py")
@@ -38,27 +37,20 @@ def setup_pipeline():
     logger.info("Starting production Polars pipeline")
     return logger
 
-
 def define_custom_filters():
-    """Define custom filter functions for advanced filtering."""
-    
-    def premium_customer_filter(data):
-        """Filter for premium customers: high balance + long tenure."""
-        return (pl.col('account_balance') >= 50000)
-    
-    def valid_contact_filter(data):
-        """Filter for customers with valid contact information."""
+    # Must return pl.Expr (vectorized), not Python booleans.
+    def premium_customer_filter(data) -> pl.Expr:
+        return pl.col('account_balance') >= 50_000
+
+    def valid_contact_filter(data) -> pl.Expr:
         return (
-            pl.col('email').str.contains(r'^[^@]+@[^@]+\.[^@]+$') &
-            pl.col('phone').str.len_chars() >= 10
+            pl.col('email').str.contains(r'^[^@]+@[^@]+\.[^@]+$')
+            & (pl.col('phone').str.len_chars() >= 10)
         )
-    
-    
     return {
         "premium_customer": premium_customer_filter,
         "valid_contact": valid_contact_filter
     }
-
 
 def execute_data_ingestion(logger):
     """Step 1: Ingest data using file_input mod."""
@@ -67,13 +59,12 @@ def execute_data_ingestion(logger):
     # Use our new file_input mod with lazy evaluation
     result = run_mod("file_input", {
         "file_path": "data/customers_large.csv",
-        "encoding": "utf-8",
         "delimiter": ",",
         "header_rows": 1,
         "read_options": {
             # Power user options for optimization
-            "ignore_errors": True,
-            "low_memory": True
+            "ignore_errors": True
+            
         }
     }, "ingest_customers")
     
@@ -86,7 +77,6 @@ def execute_data_ingestion(logger):
     logger.info(f"File size: {result['metrics']['file_size_bytes']} bytes")
     
     return result["artifacts"]["data"]  # This is a lazy DataFrame
-
 
 def execute_data_filtering(customer_data, logger):
     """Step 2: Filter data using data_filter mod with success/reject outputs."""
@@ -126,7 +116,6 @@ def execute_data_filtering(customer_data, logger):
     
     return filtered_data, rejected_data
 
-
 def execute_data_output(filtered_data, rejected_data, logger):
     """Step 3: Output data using file_output mod."""
     logger.info("=== Step 3: Data Output ===")
@@ -140,6 +129,8 @@ def execute_data_output(filtered_data, rejected_data, logger):
         "output_path": "output/filtered_customers.parquet",
         "write_options": {
             "compression": "snappy",  # Optimal compression for analytics
+            "row_group_size": 128_000,     # default is bigger; smaller → lower peak RAM
+            "data_page_size": 256_000,     # bytes; reduce page size    
         }
     }, "output_success_parquet")
     
@@ -156,7 +147,6 @@ def execute_data_output(filtered_data, rejected_data, logger):
         reject_result = run_mod("file_output", {
             "data": rejected_data,
             "output_path": "output/rejected_customers.csv",
-            "encoding": "utf-8",
             "include_header": True
         }, "output_reject_csv")
         
@@ -168,7 +158,6 @@ def execute_data_output(filtered_data, rejected_data, logger):
             logger.info(f"Reject output - Size: {reject_result['metrics']['file_size_bytes']} bytes")
     
     return results
-
 
 def run_production_pipeline(logger):
     """Execute the complete production pipeline."""
@@ -196,7 +185,6 @@ def run_production_pipeline(logger):
         import traceback
         traceback.print_exc()
         return False
-
 
 def demonstrate_lazy_evaluation(logger):
     """Demonstrate that operations remain lazy until output."""
@@ -237,7 +225,7 @@ def demonstrate_lazy_evaluation(logger):
     return False
 
 
-@monitor_execution("polars_pipeline")
+@monitor_execution("Test")
 def main():
     """Main pipeline execution with comprehensive logging."""
     # Setup
