@@ -1,7 +1,7 @@
 """
 File Output Mod for DataPy Framework - DuckDB Implementation.
 
-Writes DuckDB relations to files (CSV, JSON, Parquet). This is a SINK operation
+Writes DuckDB relations to files (CSV, Parquet). This is a SINK operation
 that executes the entire lazy chain and materializes results to disk.
 """
 
@@ -9,24 +9,23 @@ import duckdb
 from typing import Dict, Any
 from pathlib import Path
 import time
+import os
 
 from datapy.mod_manager.result import ModResult
 from datapy.mod_manager.base import ModMetadata, ConfigSchema
 from datapy.mod_manager.logger import setup_logger
 
-# Required metadata
 METADATA = ModMetadata(
     type="file_output",
     version="1.0.0",
-    description="Write DuckDB relations to files (CSV, JSON, Parquet) - SINK operation",
+    description="Write DuckDB relations to files (CSV, Parquet) - SINK operation",
     category="duckdb",
     input_ports=["input_data", "connection"],
     output_ports=["output_data", "connection"],
-    globals=["output_path", "file_type", "rows_written"],
+    globals=["output_path", "file_type"],
     packages=["duckdb>=0.9.0"]
 )
 
-# Parameter schema
 CONFIG_SCHEMA = ConfigSchema(
     required={
         "connection": {
@@ -46,8 +45,8 @@ CONFIG_SCHEMA = ConfigSchema(
         "file_type": {
             "type": "str",
             "default": None,
-            "description": "File format override (csv, json, parquet). Auto-detected if not provided",
-            "enum": ["csv", "json", "parquet", None]
+            "description": "File format (csv, parquet). Auto-detected if not provided",
+            "enum": ["csv", "parquet", None]
         },
         "overwrite": {
             "type": "bool",
@@ -57,9 +56,8 @@ CONFIG_SCHEMA = ConfigSchema(
         "create_new_relation": {
             "type": "bool",
             "default": False,
-            "description": "Read back the written file as new lazy relation for downstream mods"
+            "description": "Read back the written file as new lazy relation"
         },
-        # CSV-specific options
         "delimiter": {
             "type": "str",
             "default": ",",
@@ -73,20 +71,19 @@ CONFIG_SCHEMA = ConfigSchema(
         "compression": {
             "type": "str",
             "default": None,
-            "description": "Compression type: 'gzip', 'zstd', etc.",
-            "enum": [None, "gzip", "zstd", "none"]
+            "description": "Compression: 'gzip', 'zstd'",
+            "enum": [None, "gzip", "zstd"]
         },
         "dateformat": {
             "type": "str",
             "default": None,
-            "description": "Date format string for CSV output"
+            "description": "Date format string for CSV"
         },
         "timestampformat": {
             "type": "str",
             "default": None,
-            "description": "Timestamp format string for CSV output"
+            "description": "Timestamp format string for CSV"
         },
-        # Parquet-specific options
         "parquet_compression": {
             "type": "str",
             "default": "snappy",
@@ -104,19 +101,16 @@ CONFIG_SCHEMA = ConfigSchema(
 
 def run(params: Dict[str, Any]) -> Dict[str, Any]:
     """Execute the file output mod with given parameters."""
-    # Standard initialization
     mod_name = params.get("_mod_name", "file_output")
     mod_type = params.get("_mod_type", "file_output")
     logger = setup_logger(__name__, mod_type, mod_name)
     result = ModResult(mod_type, mod_name)
     
     try:
-        # Extract required parameters
         con = params.get("connection")
         input_relation = params.get("input_data")
         output_path = params.get("output_path")
         
-        # Validate inputs
         if con is None:
             error_msg = "Missing required parameter: 'connection'"
             logger.error(error_msg)
@@ -147,28 +141,36 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
             result.add_error(error_msg)
             return result.error()
         
-        # Determine file type
+        sanitized_path = _validate_path(output_path)
+        
         file_type = params.get("file_type")
         if not file_type:
-            file_type = _detect_file_type(output_path)
+            file_type = _detect_file_type(sanitized_path)
             logger.info(f"Auto-detected file type: {file_type}")
         else:
+            if file_type not in ["csv", "parquet"]:
+                error_msg = f"Unsupported file type: {file_type}"
+                logger.error(error_msg)
+                result.add_error(error_msg)
+                return result.error()
             logger.info(f"Using specified file type: {file_type}")
         
-        # Check if file exists and overwrite settings
         overwrite = params.get("overwrite", True)
-        output_file = Path(output_path)
-        if output_file.exists() and not overwrite:
-            error_msg = f"File already exists and overwrite=False: {output_path}"
-            logger.error(error_msg)
-            result.add_error(error_msg)
-            return result.error()
+        output_file = Path(sanitized_path)
         
-        # Create output directory if it doesn't exist
+        if output_file.exists():
+            if not overwrite:
+                error_msg = f"File exists and overwrite=False: {sanitized_path}"
+                logger.error(error_msg)
+                result.add_error(error_msg)
+                return result.error()
+            else:
+                output_file.unlink()
+                logger.info(f"Deleted existing file: {sanitized_path}")
+        
         output_file.parent.mkdir(parents=True, exist_ok=True)
         
-        # Write file based on type (THIS EXECUTES THE LAZY CHAIN!)
-        logger.info(f"Writing file: {output_path}", extra={
+        logger.info(f"Writing file: {sanitized_path}", extra={
             "file_type": file_type,
             "overwrite": overwrite
         })
@@ -176,11 +178,9 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         start_time = time.time()
         
         if file_type == "csv":
-            rows_written = _write_csv(input_relation, output_path, params, logger)
-        elif file_type == "json":
-            rows_written = _write_json(input_relation, output_path, params, logger)
+            _write_csv(con, input_relation, sanitized_path, params, logger)
         elif file_type == "parquet":
-            rows_written = _write_parquet(input_relation, output_path, params, logger)
+            _write_parquet(con, input_relation, sanitized_path, params, logger)
         else:
             error_msg = f"Unsupported file type: {file_type}"
             logger.error(error_msg)
@@ -189,34 +189,26 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         
         write_time = time.time() - start_time
         
-        # Get output file metadata
-        file_info = _get_file_info(output_path, file_type, rows_written, logger)
+        file_info = _get_file_info(sanitized_path, file_type, logger)
         
-        # Optionally create new relation from written file
         output_relation = None
         if params.get("create_new_relation", False):
             logger.info("Creating new lazy relation from written file")
-            output_relation = _read_back(con, output_path, file_type, logger)
+            output_relation = _read_back(con, sanitized_path, file_type, logger)
             result.add_artifact("output_data", output_relation)
         
-        # Add artifacts
         result.add_artifact("connection", con)
         result.add_artifact("file_info", file_info)
         
-        # Add globals for downstream mods
-        result.add_global("output_path", output_path)
+        result.add_global("output_path", sanitized_path)
         result.add_global("file_type", file_type)
-        result.add_global("rows_written", rows_written)
         
-        # Add metrics
-        result.add_metric("rows_written", rows_written)
         result.add_metric("file_size_mb", file_info["file_size_mb"])
         result.add_metric("write_time_seconds", round(write_time, 2))
         result.add_metric("file_type", file_type)
         
         logger.info(f"File output completed successfully", extra={
-            "output_path": output_path,
-            "rows_written": rows_written,
+            "output_path": sanitized_path,
             "write_time": write_time,
             "file_size_mb": file_info["file_size_mb"]
         })
@@ -230,35 +222,41 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         return result.error()
 
 
+def _validate_path(path: str) -> str:
+    """Validate output path."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Output path must be a non-empty string")
+    
+    if '\x00' in path:
+        raise ValueError("Path contains null bytes")
+    
+    return os.path.normpath(path)
+
+
 def _detect_file_type(file_path: str) -> str:
     """Auto-detect file type from extension."""
     path = Path(file_path)
     ext = path.suffix.lower().lstrip('.')
     
-    # Handle compressed extensions
     if ext in ['gz', 'gzip']:
         ext = path.stem.split('.')[-1].lower()
     
     if ext in ['csv', 'tsv', 'txt']:
         return "csv"
-    elif ext in ['json', 'jsonl', 'ndjson']:
-        return "json"
     elif ext in ['parquet', 'pq']:
         return "parquet"
     else:
         raise ValueError(f"Cannot auto-detect file type from extension: {ext}")
 
 
-def _get_file_info(file_path: str, file_type: str, rows_written: int, logger) -> Dict[str, Any]:
+def _get_file_info(file_path: str, file_type: str, logger) -> Dict[str, Any]:
     """Get file metadata after writing."""
     info = {
         "output_path": file_path,
         "file_type": file_type,
-        "rows_written": rows_written,
         "file_size_mb": 0.0
     }
     
-    # Get file size from filesystem
     try:
         path = Path(file_path)
         if path.exists() and path.is_file():
@@ -271,78 +269,68 @@ def _get_file_info(file_path: str, file_type: str, rows_written: int, logger) ->
     return info
 
 
-def _write_csv(relation: duckdb.DuckDBPyRelation, output_path: str, 
-               params: Dict[str, Any], logger) -> int:
-    """Write relation to CSV file - EXECUTES THE QUERY."""
-    # Build CSV write options
-    csv_options = {
-        "sep": params.get("delimiter", ","),
-        "header": params.get("header", True)
-    }
+def _write_csv(con: duckdb.DuckDBPyConnection, relation: duckdb.DuckDBPyRelation, 
+               output_path: str, params: Dict[str, Any], logger) -> None:
+    """Write relation to CSV file using COPY TO."""
+    delimiter = params.get("delimiter", ",")
+    if not isinstance(delimiter, str) or len(delimiter) > 4:
+        raise ValueError(f"Invalid delimiter: {delimiter}")
     
-    # Add optional parameters
-    if params.get("compression"):
-        csv_options["compression"] = params["compression"]
+    compression = params.get("compression")
+    if compression and compression not in ["gzip", "zstd"]:
+        raise ValueError(f"Invalid compression: {compression}")
+    
+    copy_sql = f"COPY ({relation}) TO ? (FORMAT CSV"
+    copy_params = [output_path]
+    
+    if params.get("header", True):
+        copy_sql += ", HEADER TRUE"
+    else:
+        copy_sql += ", HEADER FALSE"
+    
+    copy_sql += f", DELIMITER '{delimiter}'"
+    
+    if compression:
+        copy_sql += f", COMPRESSION '{compression}'"
+    
     if params.get("dateformat"):
-        csv_options["dateformat"] = params["dateformat"]
+        dateformat = params["dateformat"]
+        if len(dateformat) > 50:
+            raise ValueError("dateformat too long")
+        copy_sql += f", DATEFORMAT '{dateformat}'"
+    
     if params.get("timestampformat"):
-        csv_options["timestampformat"] = params["timestampformat"]
+        timestampformat = params["timestampformat"]
+        if len(timestampformat) > 50:
+            raise ValueError("timestampformat too long")
+        copy_sql += f", TIMESTAMPFORMAT '{timestampformat}'"
     
-    logger.debug(f"CSV write options: {csv_options}")
-    
-    # Execute and write (materializes the lazy chain)
-    relation.write_csv(output_path, **csv_options)
-    
-    # Get row count from relation shape (already executed)
-    rows_written = relation.shape[0] if hasattr(relation, 'shape') else 0
-    
-    return rows_written
-
-
-def _write_json(relation: duckdb.DuckDBPyRelation, output_path: str,
-                params: Dict[str, Any], logger) -> int:
-    """Write relation to JSON file - EXECUTES THE QUERY."""
-    json_options = {}
-    
-    # Add compression if specified
-    if params.get("compression"):
-        json_options["compression"] = params["compression"]
-    
-    logger.debug(f"JSON write options: {json_options}")
-    
-    # Execute and write (materializes the lazy chain)
-    # Note: DuckDB doesn't have direct write_json, use COPY TO
-    copy_sql = f"COPY ({relation}) TO '{output_path}' (FORMAT JSON"
-    if json_options.get("compression"):
-        copy_sql += f", COMPRESSION '{json_options['compression']}'"
     copy_sql += ")"
     
-    relation.connection.execute(copy_sql)
+    logger.debug(f"CSV COPY statement: {copy_sql}")
     
-    # Get row count
-    rows_written = relation.shape[0] if hasattr(relation, 'shape') else 0
-    
-    return rows_written
+    con.execute(copy_sql, copy_params)
 
 
-def _write_parquet(relation: duckdb.DuckDBPyRelation, output_path: str,
-                   params: Dict[str, Any], logger) -> int:
-    """Write relation to Parquet file - EXECUTES THE QUERY."""
-    # Build Parquet write options
-    parquet_options = {
-        "compression": params.get("parquet_compression", "snappy"),
-        "row_group_size": params.get("row_group_size", 122880)
-    }
+def _write_parquet(con: duckdb.DuckDBPyConnection, relation: duckdb.DuckDBPyRelation,
+                   output_path: str, params: Dict[str, Any], logger) -> None:
+    """Write relation to Parquet file using COPY TO."""
+    compression = params.get("parquet_compression", "snappy")
+    if compression not in ["snappy", "gzip", "zstd", "uncompressed"]:
+        raise ValueError(f"Invalid Parquet compression: {compression}")
     
-    logger.debug(f"Parquet write options: {parquet_options}")
+    row_group_size = params.get("row_group_size", 122880)
+    if not isinstance(row_group_size, int) or row_group_size <= 0:
+        raise ValueError(f"Invalid row_group_size: {row_group_size}")
     
-    # Execute and write (materializes the lazy chain)
-    relation.write_parquet(output_path, **parquet_options)
+    copy_sql = f"""
+        COPY ({relation}) TO ? 
+        (FORMAT PARQUET, COMPRESSION '{compression}', ROW_GROUP_SIZE {row_group_size})
+    """
     
-    # Get row count from relation shape (already executed)
-    rows_written = relation.shape[0] if hasattr(relation, 'shape') else 0
+    logger.debug(f"Parquet COPY statement: {copy_sql}")
     
-    return rows_written
+    con.execute(copy_sql, [output_path])
 
 
 def _read_back(con: duckdb.DuckDBPyConnection, file_path: str, 
@@ -352,8 +340,6 @@ def _read_back(con: duckdb.DuckDBPyConnection, file_path: str,
     
     if file_type == "csv":
         return con.read_csv(file_path)
-    elif file_type == "json":
-        return con.read_json(file_path)
     elif file_type == "parquet":
         return con.read_parquet(file_path)
     else:
