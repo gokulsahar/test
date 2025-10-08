@@ -127,7 +127,7 @@ class ModRegistry:
             
             logger.debug("Registry saved successfully")
             
-        except (OSError, PermissionError, json.JSONEncodeError) as e:
+        except (OSError, PermissionError, TypeError) as e:
             # Clean up temp file if it exists
             temp_file = self.registry_path + '.tmp'
             if Path(temp_file).exists():
