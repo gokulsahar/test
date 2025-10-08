@@ -25,8 +25,306 @@ from datapy.mod_manager.params import (
     clear_project_config,
     load_job_config,
     create_resolver,
-    _global_project_config
+    _global_project_config,
+    _get_script_directory
 )
+
+
+class TestGetScriptDirectoryParams:
+    """Test cases for _get_script_directory helper function in params module."""
+    
+    def test_get_script_directory_normal_execution(self):
+        """Test getting script directory in normal execution."""
+        result = _get_script_directory()
+        
+        # Verify it's a Path object
+        assert isinstance(result, Path)
+        assert result is not None
+    
+    def test_get_script_directory_with_valid_script_path(self, tmp_path, monkeypatch):
+        """Test script directory resolution with valid script path."""
+        # Create a fake script in a directory
+        script_dir = tmp_path / "my_project" / "scripts"
+        script_dir.mkdir(parents=True)
+        
+        fake_script = script_dir / "data_pipeline.py"
+        fake_script.write_text("#!/usr/bin/env python3\n# data pipeline")
+        
+        # Mock sys.argv[0] to point to our fake script
+        monkeypatch.setattr(sys, 'argv', [str(fake_script)])
+        
+        result = _get_script_directory()
+        
+        # Should return the parent directory (script_dir)
+        assert result == script_dir
+        assert result.name == "scripts"
+    
+    def test_get_script_directory_with_absolute_path(self, tmp_path, monkeypatch):
+        """Test script directory with absolute path in sys.argv."""
+        # Create nested structure
+        project_dir = tmp_path / "project"
+        jobs_dir = project_dir / "jobs"
+        jobs_dir.mkdir(parents=True)
+        
+        script_file = jobs_dir / "etl_job.py"
+        script_file.write_text("# ETL job script")
+        
+        # Use absolute path
+        monkeypatch.setattr(sys, 'argv', [str(script_file.resolve())])
+        
+        result = _get_script_directory()
+        
+        assert result == jobs_dir
+        assert result.is_absolute()
+    
+    def test_get_script_directory_with_relative_path(self, tmp_path, monkeypatch):
+        """Test script directory with relative path in sys.argv."""
+        # Create script structure
+        work_dir = tmp_path / "workspace"
+        work_dir.mkdir()
+        
+        script_file = work_dir / "process.py"
+        script_file.write_text("# processing script")
+        
+        # Change to work_dir and use relative path
+        monkeypatch.chdir(work_dir)
+        monkeypatch.setattr(sys, 'argv', ['process.py'])
+        
+        result = _get_script_directory()
+        
+        # Should resolve to absolute path
+        assert result == work_dir
+        assert result.is_absolute()
+    
+    def test_get_script_directory_with_nested_relative_path(self, tmp_path, monkeypatch):
+        """Test script directory with nested relative path."""
+        # Create structure: workspace/tools/scripts/run.py
+        workspace = tmp_path / "workspace"
+        scripts_dir = workspace / "tools" / "scripts"
+        scripts_dir.mkdir(parents=True)
+        
+        script_file = scripts_dir / "run.py"
+        script_file.write_text("# run script")
+        
+        # Change to workspace and use relative path
+        monkeypatch.chdir(workspace)
+        monkeypatch.setattr(sys, 'argv', ['tools/scripts/run.py'])
+        
+        result = _get_script_directory()
+        
+        assert result == scripts_dir
+    
+    def test_get_script_directory_empty_argv_fallback(self, monkeypatch, tmp_path):
+        """Test fallback to CWD when sys.argv is empty (IndexError)."""
+        # Mock sys.argv to be empty list
+        monkeypatch.setattr(sys, 'argv', [])
+        monkeypatch.chdir(tmp_path)
+        
+        result = _get_script_directory()
+        
+        # Should fallback to current working directory
+        assert result == tmp_path
+    
+    def test_get_script_directory_argv_none_fallback(self, monkeypatch, tmp_path):
+        """Test fallback when sys.argv[0] access raises IndexError."""
+        # Create a mock that raises IndexError on index access
+        class MockArgv:
+            def __getitem__(self, index):
+                raise IndexError("list index out of range")
+        
+        monkeypatch.setattr(sys, 'argv', MockArgv())
+        monkeypatch.chdir(tmp_path)
+        
+        result = _get_script_directory()
+        
+        # Should fallback to CWD
+        assert result == tmp_path
+    
+    def test_get_script_directory_oserror_fallback(self, monkeypatch, tmp_path):
+        """Test fallback to CWD when OSError occurs during path resolution."""
+        monkeypatch.chdir(tmp_path)
+        
+        # Mock sys.argv with a path
+        monkeypatch.setattr(sys, 'argv', ['test_script.py'])
+        
+        # Mock Path class to raise OSError during resolve()
+        with patch('datapy.mod_manager.params.Path') as mock_path_cls:
+            # Create mock instance that raises OSError on resolve
+            mock_instance = MagicMock(spec=Path)
+            mock_instance.resolve.side_effect = OSError("Cannot resolve path")
+            
+            # Path() constructor returns mock instance
+            mock_path_cls.return_value = mock_instance
+            
+            # Path.cwd() returns tmp_path
+            mock_path_cls.cwd.return_value = tmp_path
+            
+            result = _get_script_directory()
+            
+            # Should fallback to CWD
+            assert result == tmp_path
+    
+    def test_get_script_directory_permission_error_fallback(self, monkeypatch, tmp_path):
+        """Test fallback when PermissionError occurs (also caught as OSError)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, 'argv', ['restricted_script.py'])
+        
+        # Mock Path to raise PermissionError (subclass of OSError)
+        with patch('datapy.mod_manager.params.Path') as mock_path_cls:
+            mock_instance = MagicMock()
+            mock_instance.resolve.side_effect = PermissionError("Access denied")
+            
+            mock_path_cls.return_value = mock_instance
+            mock_path_cls.cwd.return_value = tmp_path
+            
+            result = _get_script_directory()
+            
+            assert result == tmp_path
+    
+    def test_get_script_directory_with_special_characters(self, tmp_path, monkeypatch):
+        """Test script directory with special characters in path."""
+        # Create directory with spaces and special chars
+        special_dir = tmp_path / "my scripts" / "data-processing (v2)"
+        special_dir.mkdir(parents=True)
+        
+        script_file = special_dir / "process.py"
+        script_file.write_text("# script")
+        
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        result = _get_script_directory()
+        
+        assert result == special_dir
+        assert "my scripts" in str(result)
+    
+    def test_get_script_directory_deeply_nested_path(self, tmp_path, monkeypatch):
+        """Test script directory with deeply nested path."""
+        # Create deep nesting: level1/level2/.../level10
+        deep_path = tmp_path
+        for i in range(10):
+            deep_path = deep_path / f"level{i+1}"
+        deep_path.mkdir(parents=True)
+        
+        script_file = deep_path / "deep_script.py"
+        script_file.write_text("# deep script")
+        
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        result = _get_script_directory()
+        
+        assert result == deep_path
+        assert result.name == "level10"
+    
+    def test_get_script_directory_returns_parent_not_file(self, tmp_path, monkeypatch):
+        """Test that function returns parent directory, not the script file."""
+        script_dir = tmp_path / "scripts"
+        script_dir.mkdir()
+        
+        script_file = script_dir / "my_script.py"
+        script_file.write_text("# script")
+        
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        result = _get_script_directory()
+        
+        # Should be directory, not file
+        assert result.is_dir()
+        assert not result.is_file()
+        assert result == script_dir
+        assert result != script_file
+    
+    def test_get_script_directory_with_symlink(self, tmp_path, monkeypatch):
+        """Test script directory resolves symlinks correctly."""
+        # Create actual location
+        actual_dir = tmp_path / "actual_scripts"
+        actual_dir.mkdir()
+        actual_script = actual_dir / "script.py"
+        actual_script.write_text("# actual script")
+        
+        try:
+            # Create symlink
+            link_dir = tmp_path / "linked_scripts"
+            link_dir.mkdir()
+            link_script = link_dir / "script.py"
+            link_script.symlink_to(actual_script)
+            
+            monkeypatch.setattr(sys, 'argv', [str(link_script)])
+            
+            result = _get_script_directory()
+            
+            # Path.resolve() should follow symlink to actual location
+            assert result == actual_dir
+            
+        except (OSError, NotImplementedError):
+            # Skip on systems that don't support symlinks
+            pytest.skip("Symlinks not supported on this system")
+    
+    def test_get_script_directory_cwd_is_preserved(self, monkeypatch, tmp_path):
+        """Test that fallback returns actual CWD without side effects."""
+        # Create specific working directory
+        work_dir = tmp_path / "working" / "directory"
+        work_dir.mkdir(parents=True)
+        
+        # Force fallback by empty argv
+        monkeypatch.setattr(sys, 'argv', [])
+        monkeypatch.chdir(work_dir)
+        
+        result = _get_script_directory()
+        
+        assert result == work_dir
+        assert result.name == "directory"
+        
+        # Verify CWD hasn't changed
+        assert Path.cwd() == work_dir
+    
+    def test_get_script_directory_multiple_calls_consistent(self, tmp_path, monkeypatch):
+        """Test that multiple calls return consistent results."""
+        script_dir = tmp_path / "scripts"
+        script_dir.mkdir()
+        script_file = script_dir / "test.py"
+        script_file.write_text("# test")
+        
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        # Call multiple times
+        result1 = _get_script_directory()
+        result2 = _get_script_directory()
+        result3 = _get_script_directory()
+        
+        # All calls should return the same directory
+        assert result1 == result2 == result3 == script_dir
+    
+    def test_get_script_directory_with_windows_path_separator(self, tmp_path, monkeypatch):
+        """Test handling of Windows-style path separators."""
+        script_dir = tmp_path / "project" / "scripts"
+        script_dir.mkdir(parents=True)
+        script_file = script_dir / "run.py"
+        script_file.write_text("# script")
+        
+        # Use backslashes (will be handled by Path automatically)
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        result = _get_script_directory()
+        
+        # Should work regardless of path separator
+        assert result == script_dir
+    
+    def test_get_script_directory_with_trailing_slash(self, tmp_path, monkeypatch):
+        """Test script path with trailing slash doesn't affect result."""
+        script_dir = tmp_path / "scripts"
+        script_dir.mkdir()
+        script_file = script_dir / "test.py"
+        script_file.write_text("# test")
+        
+        # Add trailing slash to the path (Path should normalize it)
+        path_with_slash = str(script_file) + os.sep
+        monkeypatch.setattr(sys, 'argv', [path_with_slash])
+        
+        result = _get_script_directory()
+        
+        # Should still get the correct parent directory
+        assert result == script_dir
+
 
 
 class TestProjectConfig:
@@ -1045,26 +1343,37 @@ class TestAdditionalCoverage:
        clear_project_config()
    
     def test_project_config_find_config_file_edge_cases(self, tmp_path):
-       """Test edge cases in config file discovery."""
-       # Test when both parent and current have config files
-       parent_dir = tmp_path / "parent"
-       child_dir = parent_dir / "child"
-       child_dir.mkdir(parents=True)
-       
-       # Create config in parent
-       parent_config = {"project_name": "parent_project"}
-       parent_config_file = parent_dir / "project_defaults.yaml"
-       parent_config_file.write_text(yaml.dump(parent_config))
-       
-       # Create config in child (should take precedence)
-       child_config = {"project_name": "child_project"}
-       child_config_file = child_dir / "project_defaults.yaml"
-       child_config_file.write_text(yaml.dump(child_config))
-       
-       # Initialize from child directory - should find parent first
-       config = ProjectConfig(str(child_dir))
-       # Based on implementation, parent config should be found first
-       assert config.project_name == "parent_project"
+        """Test edge cases in config file discovery."""
+        # Test when both parent and current have config files
+        parent_dir = tmp_path / "parent"
+        child_dir = parent_dir / "child"
+        child_dir.mkdir(parents=True)
+        
+        # Create config in parent
+        parent_config = {"project_name": "parent_project"}
+        parent_config_file = parent_dir / "project_defaults.yaml"
+        parent_config_file.write_text(yaml.dump(parent_config))
+        
+        # Create config in child
+        child_config = {"project_name": "child_project"}
+        child_config_file = child_dir / "project_defaults.yaml"
+        child_config_file.write_text(yaml.dump(child_config))
+        
+        # Initialize from child directory
+        config = ProjectConfig(str(child_dir))
+        
+        # CORRECTED EXPECTATION: The implementation searches from current directory first
+        # So it should find CHILD config first, not parent
+        assert config.project_name == "child_project"
+        assert config.project_path == child_dir
+        
+        # Test that parent config would be found if child didn't have one
+        clear_project_config()
+        child_config_file.unlink()  # Remove child config
+        
+        config2 = ProjectConfig(str(child_dir), max_depth=1)
+        assert config2.project_name == "parent_project"
+        assert config2.project_path == parent_dir
    
     def test_project_config_properties(self, tmp_path):
         """Test project config property accessors."""

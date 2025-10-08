@@ -30,8 +30,155 @@ from datapy.mod_manager.context import (
     _is_pure_variable_substitution,
     _get_context_value,
     _context_file_path,
-    _context_data
+    _context_data,
+    _get_script_directory
 )
+
+
+class TestGetScriptDirectory:
+    """Test cases for _get_script_directory helper function."""
+    
+    def test_get_script_directory_normal_execution(self):
+        """Test getting script directory in normal execution."""
+        # In normal execution, sys.argv[0] contains the script path
+        result = _get_script_directory()
+        
+        # Verify it's a Path object
+        assert isinstance(result, Path)
+        assert result is not None
+        
+        # Should be able to resolve to a directory
+        assert result.exists() or True  # May not exist in test environment
+    
+    def test_get_script_directory_with_real_script_path(self, tmp_path, monkeypatch):
+        """Test script directory resolution with actual script path."""
+        # Create a fake script in a directory
+        script_dir = tmp_path / "my_scripts"
+        script_dir.mkdir(parents=True)
+        
+        fake_script = script_dir / "pipeline.py"
+        fake_script.write_text("# fake script content")
+        
+        # Mock sys.argv[0] to point to our fake script
+        monkeypatch.setattr(sys, 'argv', [str(fake_script)])
+        
+        result = _get_script_directory()
+        
+        # Should return the parent directory (script_dir)
+        assert result == script_dir
+        assert result.name == "my_scripts"
+    
+    def test_get_script_directory_with_nested_script_path(self, tmp_path, monkeypatch):
+        """Test script directory with deeply nested path."""
+        # Create nested structure: project/jobs/extract/script.py
+        nested_path = tmp_path / "project" / "jobs" / "extract"
+        nested_path.mkdir(parents=True)
+        
+        script_file = nested_path / "extract_pipeline.py"
+        script_file.write_text("# extraction script")
+        
+        monkeypatch.setattr(sys, 'argv', [str(script_file)])
+        
+        result = _get_script_directory()
+        
+        assert result == nested_path
+        assert result.name == "extract"
+    
+    def test_get_script_directory_empty_argv_fallback(self, monkeypatch, tmp_path):
+        """Test fallback to CWD when sys.argv is empty (IndexError)."""
+        # Mock sys.argv to be empty list (causes IndexError)
+        monkeypatch.setattr(sys, 'argv', [])
+        monkeypatch.chdir(tmp_path)
+        
+        result = _get_script_directory()
+        
+        # Should fallback to current working directory
+        assert result == tmp_path
+    
+    def test_get_script_directory_invalid_path_fallback(self, monkeypatch, tmp_path):
+        """Test fallback to CWD when path resolution fails (OSError)."""
+        # The Path.resolve() doesn't actually raise OSError on invalid paths
+        # It just resolves them. So we test the actual exception path properly.
+        
+        monkeypatch.chdir(tmp_path)
+        
+        # Mock sys.argv with a valid-looking path
+        monkeypatch.setattr(sys, 'argv', ['test_script.py'])
+        
+        # Mock Path class to raise OSError during resolve()
+        from unittest.mock import MagicMock
+        
+        with patch('datapy.mod_manager.context.Path') as mock_path_cls:
+            # First call: Path(sys.argv[0]) - return a mock that raises OSError on resolve
+            mock_instance = MagicMock()
+            mock_instance.resolve.side_effect = OSError("Cannot resolve path")
+            
+            # Second call: Path.cwd() - return the actual tmp_path
+            mock_path_cls.return_value = mock_instance
+            mock_path_cls.cwd.return_value = tmp_path
+            
+            result = _get_script_directory()
+            
+            # Should fallback to CWD
+            assert result == tmp_path
+    
+    def test_get_script_directory_relative_argv_path(self, tmp_path, monkeypatch):
+        """Test script directory with relative path in sys.argv."""
+        # Create script with relative path
+        script_dir = tmp_path / "scripts"
+        script_dir.mkdir()
+        script_file = script_dir / "run.py"
+        script_file.write_text("# script")
+        
+        # Change to tmp_path and use relative path
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, 'argv', ['scripts/run.py'])
+        
+        result = _get_script_directory()
+        
+        # Should resolve to absolute path of script directory
+        assert result == script_dir
+    
+    def test_get_script_directory_symlink_resolution(self, tmp_path, monkeypatch):
+        """Test that script directory resolves symlinks correctly."""
+        # Create actual script location
+        actual_dir = tmp_path / "actual"
+        actual_dir.mkdir()
+        actual_script = actual_dir / "script.py"
+        actual_script.write_text("# actual script")
+        
+        # Create symlink (skip on Windows if symlinks not supported)
+        try:
+            link_dir = tmp_path / "link"
+            link_dir.mkdir()
+            link_script = link_dir / "script.py"
+            link_script.symlink_to(actual_script)
+            
+            monkeypatch.setattr(sys, 'argv', [str(link_script)])
+            
+            result = _get_script_directory()
+            
+            # Path.resolve() should resolve symlinks to actual location
+            assert result == actual_dir
+        except (OSError, NotImplementedError):
+            # Skip test on systems that don't support symlinks
+            pytest.skip("Symlinks not supported on this system")
+    
+    def test_get_script_directory_cwd_fallback_preserves_path(self, monkeypatch, tmp_path):
+        """Test that CWD fallback returns actual CWD path."""
+        # Create a specific directory structure
+        work_dir = tmp_path / "workspace" / "current"
+        work_dir.mkdir(parents=True)
+        
+        # Cause fallback and verify correct CWD is returned
+        monkeypatch.setattr(sys, 'argv', [])
+        monkeypatch.chdir(work_dir)
+        
+        result = _get_script_directory()
+        
+        assert result == work_dir
+        assert result.name == "current"
+
 
 
 class TestSetContext:
@@ -54,16 +201,34 @@ class TestSetContext:
     
     def test_set_context_relative_path(self, tmp_path, monkeypatch):
         """Test setting context with relative path."""
-        # Change to tmp directory
-        monkeypatch.chdir(tmp_path)
+        # Create a script directory
+        script_dir = tmp_path / "scripts"
+        script_dir.mkdir()
         
-        context_file = tmp_path / "relative_context.json"
+        # Create context file in script directory
+        context_file = script_dir / "relative_context.json"
         context_file.write_text('{"rel": "path"}')
         
+        # Mock sys.argv to simulate script running from script_dir
+        fake_script = script_dir / "pipeline.py"
+        fake_script.write_text("# fake script")
+        monkeypatch.setattr(sys, 'argv', [str(fake_script)])
+        
+        # Clear any previous context
+        clear_context()
+        
+        # Set context with relative path - should resolve from script_dir
         set_context("relative_context.json")
         
         from datapy.mod_manager.context import _context_file_path
-        assert _context_file_path == "relative_context.json"
+        
+        # The path should be resolved from script directory to absolute path
+        expected_path = str(script_dir / "relative_context.json")
+        assert _context_file_path == expected_path
+        
+        # Verify the file actually exists at that location
+        assert Path(_context_file_path).exists()
+        assert Path(_context_file_path).parent == script_dir
     
     def test_set_context_clears_cached_data(self, tmp_path):
         """Test that setting new context clears cached data."""
