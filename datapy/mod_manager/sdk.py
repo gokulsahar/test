@@ -68,6 +68,7 @@ def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any]) -> Dict[str, 
     """
     Resolve parameters using project defaults and job parameters.
     
+    Automatically detects project configuration from script location (sys.argv[0]).
     Registry mod defaults are applied later during validation step.
     
     Args:
@@ -81,7 +82,8 @@ def _resolve_mod_parameters(mod_type: str, params: Dict[str, Any]) -> Dict[str, 
         RuntimeError: If parameter resolution fails
     """
     try:
-        resolver = create_resolver()
+        # Auto-detect project config from script location
+        resolver = create_resolver()  # No search_path needed - auto-detected!
         
         # Project defaults + job params (registry defaults applied during validation)
         resolved_params = resolver.resolve_mod_params(

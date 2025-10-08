@@ -20,25 +20,64 @@ _context_file_path: Optional[str] = None
 _context_data: Optional[Dict[str, Any]] = None
 _substitution_pattern = re.compile(r'\$\{([^}]+)\}')
 
+def _get_script_directory() -> Path:
+    """
+    Get the directory of the main script being executed.
+    
+    Uses sys.argv[0] to determine the script location, which works for
+    direct script execution and when scripts import each other within
+    the same project (since they share context.json).
+    
+    Returns:
+        Path to the directory containing the main script
+    """
+    try:
+        main_script = Path(sys.argv[0]).resolve()
+        return main_script.parent
+    except (IndexError, OSError):
+        # Fallback to current working directory if sys.argv[0] fails
+        logger.warning("Could not determine script directory from sys.argv[0], using CWD")
+        return Path.cwd()
+
 
 def set_context(file_path: str) -> None:
     """
     Set context file path for variable substitution.
     
+    Relative paths are resolved from the script's directory (sys.argv[0] location).
+    Absolute paths are used as-is.
+    
     File is loaded lazily when substitution is first needed.
     
     Args:
-        file_path: Path to context JSON file
+        file_path: Path to context JSON file (relative or absolute)
         
     Raises:
         ValueError: If file_path is empty
+        
+    Examples:
+        # Relative path - resolved from script directory
+        set_context("context.json")
+        set_context("config/production.json")
+        
+        # Absolute path - used as-is
+        set_context("/full/path/to/context.json")
     """
     global _context_file_path, _context_data
     
     if not file_path or not isinstance(file_path, str):
         raise ValueError("file_path must be a non-empty string")
     
-    _context_file_path = file_path.strip()
+    file_path = file_path.strip()
+    
+    # Resolve relative paths from script directory
+    context_path = Path(file_path)
+    if not context_path.is_absolute():
+        script_dir = _get_script_directory()
+        context_path = script_dir / file_path
+        logger.debug(f"Resolving relative context path from script directory: {script_dir}")
+    
+    _context_file_path = str(context_path)
     _context_data = None  # Reset cached data
     
     logger.debug(f"Context file set: {_context_file_path}")

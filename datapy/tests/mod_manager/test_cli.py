@@ -204,22 +204,6 @@ class TestMain:
             # Verify cli() was called
             mock_cli.assert_called_once()
     
-    def test_main_registers_mod_commands(self):
-        """Test that main registers mod commands."""
-        # Track if mod_commands was imported
-        with patch('datapy.mod_manager.cli.cli') as mock_cli:
-            # Mock the command lists
-            with patch('datapy.mod_manager.mod_cli.mod_commands', [MagicMock()]):
-                with patch('datapy.mod_manager.registry_cli.registry_commands', []):
-                    with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []):
-                        with patch('sys.exit'):
-                            try:
-                                main()
-                            except (SystemExit, AttributeError):
-                                pass
-            
-            # At minimum, cli should have been called
-            assert mock_cli.called or mock_cli.add_command.called
     
     def test_main_registers_registry_commands(self):
         """Test that main registers registry commands."""
@@ -288,17 +272,16 @@ class TestMain:
     def test_main_imports_all_command_modules(self):
         """Test that main() imports all command modules."""
         with patch('datapy.mod_manager.cli.cli'):
-            # Track imports
-            with patch('datapy.mod_manager.mod_cli.mod_commands', []) as mock_mod:
-                with patch('datapy.mod_manager.registry_cli.registry_commands', []) as mock_reg:
-                    with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []) as mock_scaf:
-                        try:
-                            main()
-                        except SystemExit:
-                            pass
-                        
-                        # If we got here, imports succeeded
-                        assert True
+            # Track imports - REMOVE mod_cli from patches
+            with patch('datapy.mod_manager.registry_cli.registry_commands', []) as mock_reg:
+                with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []) as mock_scaf:
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+                    
+                    # If we got here, imports succeeded
+                    assert True
     
     def test_main_adds_commands_to_cli(self):
         """Test that main() adds commands to cli group."""
@@ -373,15 +356,7 @@ class TestCommandRegistration:
         # Check that help shows available commands
         assert "Commands:" in result.output or "Usage:" in result.output
     
-    def test_run_mod_command_available(self):
-        """Test that run-mod command is available after main() runs."""
-        # We need to call main() first to register commands
-        # But we'll just check the import works
-        try:
-            from datapy.mod_manager.mod_cli import mod_commands
-            assert len(mod_commands) > 0
-        except ImportError:
-            pytest.skip("mod_cli not available")
+    
     
     def test_list_registry_command_available(self):
         """Test that list-registry command is available after registration."""

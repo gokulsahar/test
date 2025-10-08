@@ -28,14 +28,10 @@ def main() -> None:
     """Main entry point for CLI."""
     try:
         # Import and register command groups
-        from .mod_cli import mod_commands
         from .registry_cli import registry_commands
         from .scaffold_cli import scaffold_commands
         
         # Add command groups to main CLI
-        for command in mod_commands:
-            cli.add_command(command)
-        
         for command in registry_commands:
             cli.add_command(command)
         

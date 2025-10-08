@@ -6,8 +6,9 @@ with automatic project configuration discovery and variable substitution.
 """
 
 import os
+import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 import yaml
 from .logger import setup_logger
 
@@ -15,6 +16,22 @@ logger = setup_logger(__name__)
 
 # Global project config singleton (matches context.py pattern)
 _global_project_config: Optional['ProjectConfig'] = None
+
+
+def _get_script_directory() -> Path:
+    """
+    Get the directory of the main script being executed.
+    
+    Returns:
+        Path to the directory containing the main script
+    """
+    try:
+        main_script = Path(sys.argv[0]).resolve()
+        return main_script.parent
+    except (IndexError, OSError):
+        # Fallback to current working directory if sys.argv[0] fails
+        logger.warning("Could not determine script directory from sys.argv[0], using CWD")
+        return Path.cwd()
 
 
 class ProjectConfig:
@@ -25,17 +42,23 @@ class ProjectConfig:
     and provides parameter resolution with inheritance and variable substitution.
     """
     
-    def __init__(self, search_path: Optional[str] = None) -> None:
+    def __init__(self, search_path: Optional[str] = None, max_depth: int = 1) -> None:
         """
         Initialize project configuration with automatic discovery.
         
         Args:
-            search_path: Starting path for config discovery (defaults to cwd)
+            search_path: Starting path for config discovery (defaults to script directory from sys.argv[0])
+            max_depth: Maximum levels to search upward (default=1, searches current + 1 parent)
             
         Raises:
             RuntimeError: If project config file exists but cannot be loaded
         """
-        self.search_path = Path(search_path or os.getcwd())
+        if search_path is None:
+            self.search_path = _get_script_directory()
+        else:
+            self.search_path = Path(search_path)
+            
+        self.max_depth = max_depth
         self.config_data: Dict[str, Any] = {}
         self.project_path: Optional[Path] = None
         
@@ -44,10 +67,9 @@ class ProjectConfig:
     
     def _discover_project_config(self) -> None:
         """
-        Discover project configuration in the parent directory.
+        Discover project configuration by searching upward from search_path.
         
-        Looks for project_defaults.yaml in the parent directory (typical project structure).
-        Falls back to current directory if not found in parent.
+        Searches current directory first, then parent directories up to max_depth.
         
         Raises:
             RuntimeError: If config file exists but cannot be loaded
@@ -62,21 +84,33 @@ class ProjectConfig:
 
     def _find_config_file(self) -> Optional[Path]:
         """
-        Find project configuration file in standard locations.
+        Find project configuration file by searching upward from search_path.
+        
+        Searches from current directory upward through parent directories
+        up to max_depth levels, returning the first project_defaults.yaml found.
         
         Returns:
             Path to config file if found, None otherwise
         """
-        # Primary search: parent directory (typical case)
-        parent_config_path = self.search_path.parent / "project_defaults.yaml"
+        current = self.search_path
         
-        # Fallback search: current directory
-        current_config_path = self.search_path / "project_defaults.yaml"
-        
-        if parent_config_path.exists() and parent_config_path.is_file():
-            return parent_config_path
-        elif current_config_path.exists() and current_config_path.is_file():
-            return current_config_path
+        # Search current directory + max_depth parent levels
+        for level in range(self.max_depth + 1):
+            config_path = current / "project_defaults.yaml"
+            
+            if config_path.exists() and config_path.is_file():
+                logger.debug(f"Found project config at level {level}: {config_path}")
+                return config_path
+            
+            # Move to parent directory
+            parent = current.parent
+            
+            # Check if we've reached filesystem root
+            if parent == current:
+                logger.debug("Reached filesystem root, no config found")
+                break
+                
+            current = parent
         
         return None
 
@@ -100,7 +134,7 @@ class ProjectConfig:
             self.project_path = config_path.parent
             self._set_default_project_name()
             
-            logger.debug(f"Found project config: {config_path}")
+            logger.debug(f"Loaded project config: {config_path}")
             
         except yaml.YAMLError as e:
             raise RuntimeError(f"Invalid YAML in project config {config_path}: {e}")
@@ -180,10 +214,10 @@ class ParameterResolver:
         self.project_config = project_config or get_project_config()
     
     def resolve_mod_params(
-    self,
-    mod_name: str,
-    job_params: Dict[str, Any]
-) -> Dict[str, Any]:
+        self,
+        mod_name: str,
+        job_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Resolve parameters for a mod using the inheritance chain.
         
@@ -222,12 +256,16 @@ class ParameterResolver:
         return resolved
 
 
-def get_project_config(search_path: Optional[str] = None) -> ProjectConfig:
+def get_project_config(search_path: Optional[str] = None, max_depth: int = 1) -> ProjectConfig:
     """
     Get global project config instance (singleton for performance).
     
+    Auto-detects project configuration from script location (sys.argv[0])
+    when search_path is not provided.
+    
     Args:
-        search_path: Starting path for project config discovery
+        search_path: Starting path for project config discovery (auto-detected if None)
+        max_depth: Maximum levels to search upward (default=1)
         
     Returns:
         Cached ProjectConfig instance
@@ -239,7 +277,7 @@ def get_project_config(search_path: Optional[str] = None) -> ProjectConfig:
     
     if _global_project_config is None:
         try:
-            _global_project_config = ProjectConfig(search_path)
+            _global_project_config = ProjectConfig(search_path, max_depth)
         except Exception as e:
             raise RuntimeError(f"Failed to create project config: {e}")
     
@@ -295,12 +333,16 @@ def load_job_config(config_path: str) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to load job config {config_path}: {e}")
 
 
-def create_resolver(search_path: Optional[str] = None) -> ParameterResolver:
+def create_resolver(search_path: Optional[str] = None, max_depth: int = 1) -> ParameterResolver:
     """
     Convenience function to create a parameter resolver with cached project config.
     
+    Auto-detects project configuration from script location (sys.argv[0])
+    when search_path is not provided.
+    
     Args:
-        search_path: Starting path for project config discovery
+        search_path: Starting path for project config discovery (auto-detected if None)
+        max_depth: Maximum levels to search upward (default=1)
         
     Returns:
         Configured ParameterResolver instance with cached project config
@@ -309,7 +351,7 @@ def create_resolver(search_path: Optional[str] = None) -> ParameterResolver:
         RuntimeError: If project config discovery fails
     """
     try:
-        project_config = get_project_config(search_path)
+        project_config = get_project_config(search_path, max_depth)
         return ParameterResolver(project_config)
     except Exception as e:
         raise RuntimeError(f"Failed to create parameter resolver: {e}")
