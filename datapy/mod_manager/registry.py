@@ -127,13 +127,13 @@ class ModRegistry:
             
             logger.debug("Registry saved successfully")
             
-        except (OSError, PermissionError, TypeError) as e:
+        except (OSError,  TypeError) as e:
             # Clean up temp file if it exists
             temp_file = self.registry_path + '.tmp'
             if Path(temp_file).exists():
                 try:
                     os.unlink(temp_file)
-                except (OSError, PermissionError):
+                except (OSError):
                     logger.warning(f"Failed to cleanup temp file: {temp_file}")
             raise RuntimeError(f"Failed to save registry: {e}")
     

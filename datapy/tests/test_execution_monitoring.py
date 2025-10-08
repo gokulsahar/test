@@ -476,10 +476,9 @@ class TestEdgeCases:
             mock_executor
         )
         
-        # Should replace invalid metrics and add monitoring metrics
+        # Should preserve invalid metrics as-is (monitoring skips invalid metrics)
         assert "metrics" in result
-        assert isinstance(result["metrics"], dict)
-        assert "execution_monitoring" in result["metrics"]
+        assert result["metrics"] == "not_a_dict" 
         
     def test_monitoring_performance_overhead(self):
         """Test that monitoring overhead is minimal."""

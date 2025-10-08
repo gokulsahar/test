@@ -8,6 +8,7 @@ and configurable log levels. No file management - output to stdout/stderr only.
 import logging
 import json
 import sys
+import traceback
 from typing import Dict, Any, Optional
 from datetime import datetime
 
@@ -17,60 +18,17 @@ DEFAULT_LOG_CONFIG = {
 }
 
 
-# COMMENTED OUT: Original JSON formatter - kept for potential future use
-# class DataPyFormatter(logging.Formatter):
-#     """JSON formatter for structured logging with simplified fields."""
-#     
-#     def format(self, record: logging.LogRecord) -> str:
-#         """
-#         Format log record as JSON structure.
-#         
-#         Args:
-#             record: Log record to format
-#             
-#         Returns:
-#             JSON formatted log entry
-#         """
-#         log_entry = {
-#             "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
-#             "level": record.levelname,
-#             "logger": record.name,
-#             "message": record.getMessage(),
-#         }
-#         
-#         # Add mod-specific context if available
-#         if hasattr(record, 'mod_type'):
-#             log_entry["mod_type"] = record.mod_type
-#         if hasattr(record, 'mod_name'):
-#             log_entry["mod_name"] = record.mod_name
-#         
-#         # Add exception info if present
-#         if record.exc_info:
-#             log_entry["exception"] = self.formatException(record.exc_info)
-#         
-#         # Add any extra fields (filter out internal logging fields)
-#         excluded_fields = {
-#             'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
-#             'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
-#             'relativeCreated', 'thread', 'threadName', 'processName', 
-#             'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
-#             'mod_name', 'message'
-#         }
-#         
-#         for key, value in record.__dict__.items():
-#             if key not in excluded_fields and not key.startswith('_'):
-#                 try:
-#                     # Ensure value is JSON serializable
-#                     json.dumps(value, default=str)
-#                     log_entry[key] = value
-#                 except (TypeError, ValueError):
-#                     log_entry[key] = str(value)
-#         
-#         return json.dumps(log_entry, default=str)
-
-
 class TabDelimitedFormatter(logging.Formatter):
     """Tab-delimited formatter for human-friendly logs that can be loaded into databases."""
+    
+    # Fields to exclude when collecting extra fields from log records
+    EXCLUDED_FIELDS = {
+        'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
+        'filename', 'module', 'lineno', 'funcName', 'created', 'msecs',
+        'relativeCreated', 'thread', 'threadName', 'processName',
+        'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type',
+        'mod_name', 'message', 'taskName'
+    }
     
     def format(self, record: logging.LogRecord) -> str:
         """
@@ -84,103 +42,184 @@ class TabDelimitedFormatter(logging.Formatter):
         Returns:
             Tab-delimited log entry with full stack traces for warnings/errors
         """
-        import traceback
-        
-        # Core fields
+        # Extract core fields
         timestamp = datetime.fromtimestamp(record.created).isoformat() + "Z"
         level = record.levelname
         logger_name = record.name
         message = record.getMessage()
-        
-        # Mod context fields (use '-' for empty)
         mod_type = getattr(record, 'mod_type', '-')
         mod_name = getattr(record, 'mod_name', '-')
         
-        # Collect extra fields (exclude standard logging fields and mod context)
-        excluded_fields = {
-            'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
-            'filename', 'module', 'lineno', 'funcName', 'created', 'msecs', 
-            'relativeCreated', 'thread', 'threadName', 'processName', 
-            'process', 'stack_info', 'exc_info', 'exc_text', 'mod_type', 
-            'mod_name', 'message', 'taskName'
-        }
+        # Collect extra fields
+        extra_fields = self._collect_extra_fields(record)
         
+        # Add stack trace for warnings and errors
+        if record.levelno >= logging.WARNING:
+            self._add_stack_trace(record, extra_fields)
+            return self._format_error_log(
+                timestamp, logger_name, message, 
+                mod_type, mod_name, extra_fields
+            )
+        
+        # Standard tab-delimited format for other levels
+        return self._format_standard_log(
+            timestamp, level, logger_name, 
+            mod_type, mod_name, message, extra_fields
+        )
+    
+    def _collect_extra_fields(self, record: logging.LogRecord) -> Dict[str, Any]:
+        """
+        Collect extra fields from log record, excluding standard logging fields.
+        
+        Args:
+            record: Log record to extract fields from
+            
+        Returns:
+            Dictionary of extra fields with JSON-serializable values
+        """
         extra_fields = {}
+        
         for key, value in record.__dict__.items():
-            if key not in excluded_fields and not key.startswith('_'):
-                try:
-                    # Ensure value is JSON serializable
-                    json.dumps(value, default=str)
-                    extra_fields[key] = value
-                except (TypeError, ValueError):
-                    extra_fields[key] = str(value)
+            if key in self.EXCLUDED_FIELDS or key.startswith('_'):
+                continue
+            
+            try:
+                json.dumps(value, default=str)
+                extra_fields[key] = value
+            except (TypeError, ValueError):
+                extra_fields[key] = str(value)
         
-        # For WARNING, ERROR, CRITICAL: automatically add full stack trace
-        if record.levelno >= logging.WARNING:
-            
-            # If there's already exception info, use it
-            if record.exc_info:
-                stack_trace = self.formatException(record.exc_info)
-                extra_fields["stack_trace"] = stack_trace
-            else:
-                # Generate current stack trace for warnings/errors without exceptions
-                current_stack = traceback.format_stack()
-                # Remove the last few frames (formatter internals)
-                filtered_stack = current_stack[:-3]  # Remove formatter, logging internals
-                stack_trace = ''.join(filtered_stack).strip()
-                extra_fields["stack_trace"] = stack_trace
+        return extra_fields
+    
+    def _add_stack_trace(
+        self, 
+        record: logging.LogRecord, 
+        extra_fields: Dict[str, Any]
+    ) -> None:
+        """
+        Add stack trace to extra fields for warning/error logs.
         
-        # For ERROR/WARNING: Use enhanced formatting with clean stack traces
-        if record.levelno >= logging.WARNING:
-            lines = []
-            lines.append("=" * 80)
-            lines.append(f"ERROR: {message}")
-            lines.append(f"Time: {timestamp} | Logger: {logger_name}")
-            if mod_type != '-' or mod_name != '-':
-                lines.append(f"Mod: {mod_type} | Name: {mod_name}")
-            
-            # Add clean stack trace if available
-            if "stack_trace" in extra_fields:
-                lines.append("Stack Trace:")
-                lines.append("-" * 40)
-                # Print clean stack trace (no JSON escaping)
-                lines.append(extra_fields["stack_trace"])
-                lines.append("-" * 40)
-            
-            # Add other extra fields if any (excluding stack_trace)
-            other_fields = {k: v for k, v in extra_fields.items() if k != "stack_trace"}
-            if other_fields:
-                lines.append(f"Additional Info: {json.dumps(other_fields, default=str)}")
-            
-            lines.append("=" * 80)
-            return '\n'.join(lines)
-        
-        # For other levels: Use standard tab-delimited format
+        Args:
+            record: Log record to extract stack trace from
+            extra_fields: Dictionary to add stack trace to (modified in place)
+        """
+        if record.exc_info:
+            stack_trace = self.formatException(record.exc_info)
         else:
-            # Convert extra fields to JSON string
-            if extra_fields:
-                extra_fields_str = json.dumps(extra_fields, default=str)
-            else:
-                extra_fields_str = '-'
+            current_stack = traceback.format_stack()
+            filtered_stack = current_stack[:-3]
+            stack_trace = ''.join(filtered_stack).strip()
+        
+        extra_fields["stack_trace"] = stack_trace
+    
+    def _format_error_log(
+        self,
+        timestamp: str,
+        logger_name: str,
+        message: str,
+        mod_type: str,
+        mod_name: str,
+        extra_fields: Dict[str, Any]
+    ) -> str:
+        """
+        Format error/warning logs with enhanced multi-line structure.
+        
+        Args:
+            timestamp: ISO format timestamp
+            logger_name: Name of the logger
+            message: Log message
+            mod_type: Mod type context
+            mod_name: Mod name context
+            extra_fields: Extra fields including stack trace
             
-            # Escape tabs and newlines in core fields
-            message = message.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-            logger_name = logger_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-            mod_type = mod_type.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
-            mod_name = mod_name.replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
+        Returns:
+            Multi-line formatted error log
+        """
+        lines = [
+            "=" * 80,
+            f"ERROR: {message}",
+            f"Time: {timestamp} | Logger: {logger_name}"
+        ]
+        
+        if mod_type != '-' or mod_name != '-':
+            lines.append(f"Mod: {mod_type} | Name: {mod_name}")
+        
+        if "stack_trace" in extra_fields:
+            lines.extend([
+                "Stack Trace:",
+                "-" * 40,
+                extra_fields["stack_trace"],
+                "-" * 40
+            ])
+        
+        other_fields = {k: v for k, v in extra_fields.items() if k != "stack_trace"}
+        if other_fields:
+            lines.append(f"Additional Info: {json.dumps(other_fields, default=str)}")
+        
+        lines.append("=" * 80)
+        return '\n'.join(lines)
+    
+    def _format_standard_log(
+        self,
+        timestamp: str,
+        level: str,
+        logger_name: str,
+        mod_type: str,
+        mod_name: str,
+        message: str,
+        extra_fields: Dict[str, Any]
+    ) -> str:
+        """
+        Format standard tab-delimited log entry.
+        
+        Args:
+            timestamp: ISO format timestamp
+            level: Log level name
+            logger_name: Name of the logger
+            mod_type: Mod type context
+            mod_name: Mod name context
+            message: Log message
+            extra_fields: Extra fields to include
             
-            # Build tab-delimited log entry
-            log_parts = [
-                timestamp,
-                level,
-                logger_name,
-                mod_type,
-                mod_name,
-                message,
-                extra_fields_str
-            ]
+        Returns:
+            Tab-delimited log entry
+        """
+        extra_fields_str = json.dumps(extra_fields, default=str) if extra_fields else '-'
+        
+        # Escape special characters in fields
+        message = self._escape_field(message)
+        logger_name = self._escape_field(logger_name)
+        mod_type = self._escape_field(mod_type)
+        mod_name = self._escape_field(mod_name)
+        
+        log_parts = [
+            timestamp,
+            level,
+            logger_name,
+            mod_type,
+            mod_name,
+            message,
+            extra_fields_str
+        ]
+        
+        return '\t'.join(log_parts)
+    
+    @staticmethod
+    def _escape_field(field: str) -> str:
+        """
+        Escape tabs, newlines, and carriage returns in field values.
+        
+        Args:
+            field: Field value to escape
             
-            return '\t'.join(log_parts)
+        Returns:
+            Escaped field value
+        """
+        return (field
+                .replace('\t', '\\t')
+                .replace('\n', '\\n')
+                .replace('\r', '\\r'))
+
 
 def setup_console_logging(log_config: Dict[str, Any]) -> None:
     """
@@ -260,7 +299,7 @@ def setup_logger(
         
     except Exception as e:
         raise RuntimeError(f"Failed to setup logger {name}: {e}")
-    
+
 
 def set_log_level(level: str) -> None:
     """
@@ -286,12 +325,12 @@ def set_log_level(level: str) -> None:
 
 def reset_logging() -> None:
     """
-    Reset logging state for testing.
+    Reset logging configuration (useful for testing).
     
-    Warning: This should only be used in testing environments.
+    Clears all handlers and resets to default state.
     
     Raises:
-        RuntimeError: If logging reset fails.
+        RuntimeError: If handler cleanup fails
     """
     try:
         root_logger = logging.getLogger()
@@ -300,4 +339,4 @@ def reset_logging() -> None:
             root_logger.removeHandler(handler)
         root_logger.setLevel(logging.WARNING)
     except Exception as e:
-        raise RuntimeError(f"Failed to reset logging: {e}") from e
+        raise RuntimeError(str(e)) from e

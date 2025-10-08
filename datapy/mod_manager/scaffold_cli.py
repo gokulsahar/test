@@ -178,7 +178,7 @@ def _create_pipeline_file(job_path: Path, job_name: str) -> None:
     try:
         pipeline_content = PIPELINE_TEMPLATE.format(job_name=job_name)
         pipeline_file.write_text(pipeline_content, encoding='utf-8')
-        click.echo(f"  ✓ Created {job_name}_pipeline.py")
+        click.echo(f"   Created {job_name}_pipeline.py")
     except Exception as e:
         click.echo(f"Error: Failed to create pipeline file: {e}", err=True)
         sys.exit(RUNTIME_ERROR)
@@ -206,7 +206,7 @@ def _create_context_file(job_path: Path, job_name: str) -> None:
         # Write with nice formatting
         context_content = json.dumps(context_data, indent=2, ensure_ascii=False)
         context_file.write_text(context_content, encoding='utf-8')
-        click.echo(f"  ✓ Created {job_name}_context.json")
+        click.echo(f"   Created {job_name}_context.json")
     except Exception as e:
         click.echo(f"Error: Failed to create context file: {e}", err=True)
         sys.exit(RUNTIME_ERROR)
@@ -245,12 +245,12 @@ def create_job_command(job_name: str, force: bool, output_dir: Optional[str]) ->
         _create_context_file(job_path, validated_job_name)
         
         # Success message
-        click.echo(f"\n✓ Successfully created job '{validated_job_name}'")
-        click.echo(f"\nJob structure:")
+        click.echo(f"\n Successfully created job '{validated_job_name}'")
+        click.echo("\nJob structure:")
         click.echo(f"  {validated_job_name}/")
         click.echo(f"  ├── {validated_job_name}_pipeline.py")
         click.echo(f"  └── {validated_job_name}_context.json")
-        click.echo(f"\nNext steps:")
+        click.echo("\nNext steps:")
         click.echo(f"  1. Edit {validated_job_name}_context.json with your configuration")
         click.echo(f"  2. Add mod executions in {validated_job_name}_pipeline.py")
         click.echo(f"  3. Run: python {validated_job_name}/{validated_job_name}_pipeline.py")

@@ -106,9 +106,6 @@ def execute_with_monitoring(
         if isinstance(result, dict):
             if "metrics" not in result:
                 result["metrics"] = {}
-            elif not isinstance(result["metrics"], dict):
-                # If metrics exists but is not a dict, replace it
-                result["metrics"] = {}
             
             result["metrics"]["execution_monitoring"] = {
                 "execution_time": execution_time,

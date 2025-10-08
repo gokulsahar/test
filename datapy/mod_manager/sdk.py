@@ -133,7 +133,7 @@ def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, 
         params_with_meta['_mod_type'] = mod_type
         
         # Execute mod function
-        mod_logger.debug(f"Executing mod function", extra={"params_count": len(validated_params)})
+        mod_logger.debug("Executing mod function", extra={"params_count": len(validated_params)})
         result = run_func(params_with_meta)
         
         # Validate result structure
@@ -156,7 +156,7 @@ def _execute_mod_function(mod_info: Dict[str, Any], validated_params: Dict[str, 
         result['logs']['mod_name'] = mod_name
         result['logs']['mod_type'] = mod_type
         
-        mod_logger.debug(f"Mod execution completed", extra={
+        mod_logger.debug("Mod execution completed", extra={
             "status": result['status'],
             "metrics": result["metrics"],
             "exit_code": result['exit_code']
@@ -238,27 +238,27 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
             mod_info = registry.get_mod_info(mod_type)
             logger.debug(f"Found mod in registry: {mod_type}")
         except ValueError as e:
-            suggestion = f"python -m datapy register-mod <module_path>"
+            suggestion = "python -m datapy register-mod <module_path>"
             return validation_error(mod_name, f"{e}. Register it with: {suggestion}")
         
         # 2. Resolve parameters (project defaults + job params only)
         try:
             resolved_params = _resolve_mod_parameters(mod_type, params)
-            logger.debug(f"Parameters resolved", extra={"param_count": len(resolved_params)})
+            logger.debug("Parameters resolved", extra={"param_count": len(resolved_params)})
         except RuntimeError as e:
             return validation_error(mod_name, str(e))
         
         # 3. Context variable substitution
         try:
             substituted_params = substitute_context_variables(resolved_params)
-            logger.debug(f"Context substitution completed")
+            logger.debug("Context substitution completed")
         except (ValueError, RuntimeError) as e:
             return validation_error(mod_name, f"Context substitution failed: {e}")
         
         # 4. Validate parameters using JSON Schema (CORRECT - old working version)
         try:
             validated_params = validate_mod_parameters(mod_info, substituted_params)
-            logger.debug(f"Parameters validated successfully")
+            logger.debug("Parameters validated successfully")
         except ValueError as e:
             return validation_error(mod_name, str(e))
         
@@ -301,7 +301,7 @@ def _parse_common_args() -> Dict[str, Any]:
                            help='Path to context JSON file for variable substitution')
         
         # Parse known args only, ignore everything else
-        args, unknown = parser.parse_known_args()
+        args, _ = parser.parse_known_args()
         
         return {
             "log_level": args.log_level.upper() if args.log_level else "INFO",
