@@ -272,7 +272,6 @@ class TestMain:
     def test_main_imports_all_command_modules(self):
         """Test that main() imports all command modules."""
         with patch('datapy.mod_manager.cli.cli'):
-            # Track imports - REMOVE mod_cli from patches
             with patch('datapy.mod_manager.registry_cli.registry_commands', []) as mock_reg:
                 with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []) as mock_scaf:
                     try:
@@ -288,32 +287,30 @@ class TestMain:
         mock_command = MagicMock()
         mock_command.name = 'test-command'
         
-        with patch('datapy.mod_manager.mod_cli.mod_commands', [mock_command]):
-            with patch('datapy.mod_manager.registry_cli.registry_commands', []):
-                with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []):
-                    with patch('datapy.mod_manager.cli.cli') as mock_cli:
-                        mock_cli.add_command = MagicMock()
-                        try:
-                            main()
-                        except SystemExit:
-                            pass
-                        
-                        # Verify add_command was called
-                        assert mock_cli.add_command.called or mock_cli.called
+        with patch('datapy.mod_manager.registry_cli.registry_commands', [mock_command]):
+            with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []):
+                with patch('datapy.mod_manager.cli.cli') as mock_cli:
+                    mock_cli.add_command = MagicMock()
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+                    
+                    # Verify add_command was called
+                    assert mock_cli.add_command.called or mock_cli.called
     
     def test_main_executes_cli_after_registration(self):
         """Test that main() executes cli() after registering commands."""
-        with patch('datapy.mod_manager.mod_cli.mod_commands', []):
-            with patch('datapy.mod_manager.registry_cli.registry_commands', []):
-                with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []):
-                    with patch('datapy.mod_manager.cli.cli') as mock_cli:
-                        try:
-                            main()
-                        except SystemExit:
-                            pass
-                        
-                        # cli() should be called
-                        mock_cli.assert_called_once()
+        with patch('datapy.mod_manager.registry_cli.registry_commands', []):
+            with patch('datapy.mod_manager.scaffold_cli.scaffold_commands', []):
+                with patch('datapy.mod_manager.cli.cli') as mock_cli:
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+                    
+                    # cli() should be called
+                    mock_cli.assert_called_once()
     
     def test_main_try_except_structure(self):
         """Test main() try-except structure catches all exceptions."""
