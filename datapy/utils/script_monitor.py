@@ -86,9 +86,70 @@ class RealTimeMemoryTracker:
         return max(self.peak_memory, final_memory)
 
 
+def _generate_display_name(func: Callable, custom_name: Optional[str]) -> str:
+    """Generate display name for monitored function."""
+    if custom_name is not None:
+        return custom_name
+    
+    try:
+        frame = sys._getframe(2)
+        filename = os.path.basename(frame.f_code.co_filename)
+        file_base = os.path.splitext(filename)[0]
+        return f"{file_base}.{func.__name__}"
+    except Exception:
+        return func.__name__
+
+
+def _attach_metrics_to_result(result: Any, execution_time: float, peak_memory: float, 
+                               display_name: str, psutil_available: bool) -> None:
+    """Attach execution metrics to result dict if possible."""
+    if not isinstance(result, dict):
+        return
+    
+    try:
+        metrics = result.setdefault('metrics', {})
+        if isinstance(metrics, dict):
+            metrics['execution_monitoring'] = {
+                'execution_time_seconds': round(execution_time, 3),
+                'peak_memory_mb': round(peak_memory, 2),
+                'function_name': display_name,
+                'monitoring_available': psutil_available
+            }
+    except Exception:
+        pass
+
+
+def _log_execution_summary(display_name: str, execution_time: float, 
+                           peak_memory: float, psutil_available: bool) -> None:
+    """Log execution summary with appropriate detail level."""
+    logger = setup_logger(__name__)
+    
+    if psutil_available:
+        logger.info(f"{display_name} - EXECUTION COMPLETE")
+        logger.info(f"Execution Time: {execution_time:.3f} seconds")
+        logger.info(f"Peak Memory: {peak_memory:.2f} MB")
+    else:
+        logger.info(f"{display_name} completed in {execution_time:.3f}s")
+        logger.warning("Memory monitoring unavailable (install psutil)")
+
+
+def _log_execution_error(display_name: str, execution_time: float) -> None:
+    """Log execution error with timing information."""
+    logger = setup_logger(__name__)
+    logger.error(f"{display_name} failed after {execution_time:.3f}s")
+
+
+def _stop_tracker_safely(tracker) -> None:
+    """Stop memory tracker with error handling."""
+    try:
+        tracker.stop_monitoring()
+    except Exception:
+        pass
+
+
 def monitor_execution(name: Optional[str] = None) -> Callable:
     """
-    Production-ready decorator for accurate execution monitoring.
+    Decorator for accurate execution monitoring.
     
     Features:
     - Real-time peak memory tracking with continuous sampling
@@ -116,73 +177,36 @@ def monitor_execution(name: Optional[str] = None) -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
-            # Auto-generate name if not provided
-            display_name = name
-            if display_name is None:
-                try:
-                    frame = sys._getframe(1)
-                    filename = os.path.basename(frame.f_code.co_filename)
-                    file_base = os.path.splitext(filename)[0]
-                    display_name = f"{file_base}.{func.__name__}"
-                except Exception:
-                    display_name = func.__name__
-            
-            # Initialize tracker
+            display_name = _generate_display_name(func, name)
             tracker = RealTimeMemoryTracker()
             
-            # Start monitoring
             start_time = time.perf_counter()
-            initial_memory = tracker.start_monitoring()
+            tracker.start_monitoring()
             
             try:
-                # Execute the function while monitoring runs in background
                 result = func(*args, **kwargs)
                 
-                # Stop monitoring and get results
                 end_time = time.perf_counter()
                 execution_time = end_time - start_time
                 peak_memory = tracker.stop_monitoring()
                 
-                # Add metrics to result if it's a dict
-                if isinstance(result, dict):
-                    try:
-                        metrics = result.setdefault('metrics', {})
-                        if isinstance(metrics, dict):
-                            metrics['execution_monitoring'] = {
-                                'execution_time_seconds': round(execution_time, 3),
-                                'peak_memory_mb': round(peak_memory, 2),
-                                'function_name': display_name,
-                                'monitoring_available': tracker.psutil_available
-                            }
-                    except Exception:
-                        pass
+                _attach_metrics_to_result(result, execution_time, peak_memory, 
+                                         display_name, tracker.psutil_available)
                 
-                # Log summary using your logger
-                logger = setup_logger(__name__)
-                if tracker.psutil_available:
-                    logger.info(f"{display_name} - EXECUTION COMPLETE")
-                    logger.info(f"Execution Time: {execution_time:.3f} seconds")
-                    logger.info(f"Peak Memory: {peak_memory:.2f} MB")
-                else:
-                    logger.info(f"{display_name} completed in {execution_time:.3f}s")
-                    logger.warning("Memory monitoring unavailable (install psutil)")
+                _log_execution_summary(display_name, execution_time, peak_memory, 
+                                      tracker.psutil_available)
                 
                 return result
                 
-            except Exception as e:
-                # Ensure monitoring stops even on exception
-                try:
-                    tracker.stop_monitoring()
-                except Exception:
-                    pass
+            except Exception:
+                _stop_tracker_safely(tracker)
                 
                 end_time = time.perf_counter()
                 execution_time = end_time - start_time
                 
-                logger = setup_logger(__name__)
-                logger.error(f"{display_name} failed after {execution_time:.3f}s")
+                _log_execution_error(display_name, execution_time)
                 
-                raise  # Re-raise the original exception
+                raise
         
         return wrapper
     return decorator
