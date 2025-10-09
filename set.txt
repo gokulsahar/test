@@ -1,0 +1,256 @@
+"""
+Setup configuration for the DataPy ETL Framework.
+
+Production-ready installation configuration with complete dependency
+management and entry points for CLI usage.
+"""
+
+from setuptools import setup, find_packages
+import os
+from pathlib import Path
+
+# Read version from package __init__.py
+version_file = os.path.join(os.path.dirname(__file__), 'datapy', '__init__.py')
+version_info = {}
+with open(version_file, encoding='utf-8') as f:
+    exec(f.read(), version_info)
+
+# Read long description from README if it exists
+long_description = "A Python framework for creating reusable ETL components with unified parameter management, logging, and result handling."
+readme_path = Path(__file__).parent / 'README.md'
+if readme_path.exists():
+    with open(readme_path, 'r', encoding='utf-8') as f:
+        long_description = f.read()
+
+setup(
+    # Package identification
+    name="datapy",
+    version=version_info['__version__'],
+    description=version_info['__description__'],
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    
+    # Author information (PLACEHOLDER - Update with actual values)
+    author="YOUR_NAME_OR_ORGANIZATION",
+    author_email="your.email@example.com",
+    maintainer="YOUR_NAME_OR_ORGANIZATION",
+    maintainer_email="your.email@example.com",
+    
+    # Project URLs (PLACEHOLDER - Update with actual values)
+    url="https://github.com/your-org/datapy",
+    project_urls={
+        "Source": "https://github.com/your-org/datapy",
+        "Bug Tracker": "https://github.com/your-org/datapy/issues",
+        "Documentation": "https://github.com/your-org/datapy/wiki",
+    },
+    
+    # Python version requirement
+    python_requires=">=3.12",
+    
+    # Package discovery
+    packages=find_packages(exclude=['tests', 'tests.*', 'testScripts', 'testScripts.*']),
+    include_package_data=True,
+    
+    # Core runtime dependencies
+    install_requires=[
+        "pydantic>=2.0.0",
+        "PyYAML>=6.0.0",
+        "click>=8.0.0",
+        "pandas>=1.5.0",
+        "polars>=0.20.0",
+        "duckdb>=1.0.0",
+        "psutil>=5.9.0",
+        "chardet>=5.0.0",
+    ],
+    
+    # Optional dependencies for development and testing
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0",
+            "pytest-cov>=4.0.0",
+        ],
+    },
+    
+    # CLI entry points
+    entry_points={
+        "console_scripts": [
+            "datapy=datapy.__main__:main",
+        ],
+    },
+    
+    # Package metadata classifiers
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "Intended Audience :: System Administrators",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        "Topic :: Database",
+        "Topic :: Scientific/Engineering :: Information Analysis",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Operating System :: OS Independent",
+        "Natural Language :: English",
+    ],
+    
+    # Keywords for discovery
+    keywords=[
+        "etl",
+        "data-pipeline",
+        "data-processing",
+        "pandas",
+        "polars",
+        "duckdb",
+        "workflow",
+        "data-engineering",
+    ],
+    
+    # Package data to include
+    package_data={
+        "datapy": [
+            "py.typed",
+            "mod_registry.json",
+        ],
+    },
+    
+    # Not zip safe due to registry file requirements
+    zip_safe=False,
+)
+
+
+
+
+
+
+==================================
+
+
+[metadata]
+name = datapy
+version = attr: datapy.__version__
+description = A Python framework for creating reusable ETL components
+long_description = file: README.md
+long_description_content_type = text/markdown
+author = YOUR_NAME_OR_ORGANIZATION
+author_email = your.email@example.com
+maintainer = YOUR_NAME_OR_ORGANIZATION
+maintainer_email = your.email@example.com
+url = https://github.com/your-org/datapy
+project_urls =
+    Source = https://github.com/your-org/datapy
+    Bug Tracker = https://github.com/your-org/datapy/issues
+    Documentation = https://github.com/your-org/datapy/wiki
+license_files = LICENSE
+keywords = etl, data-pipeline, data-processing, pandas, polars, duckdb, workflow, data-engineering
+classifiers =
+    Development Status :: 5 - Production/Stable
+    Intended Audience :: Developers
+    Intended Audience :: System Administrators
+    Topic :: Software Development :: Libraries :: Python Modules
+    Topic :: Database
+    Topic :: Scientific/Engineering :: Information Analysis
+    Programming Language :: Python :: 3
+    Programming Language :: Python :: 3.12
+    Programming Language :: Python :: 3.13
+    Operating System :: OS Independent
+    Natural Language :: English
+
+[options]
+zip_safe = False
+include_package_data = True
+python_requires = >=3.12
+packages = find:
+install_requires =
+    pydantic>=2.0.0
+    PyYAML>=6.0.0
+    click>=8.0.0
+    pandas>=1.5.0
+    polars>=0.20.0
+    duckdb>=1.0.0
+    psutil>=5.9.0
+    chardet>=5.0.0
+
+[options.packages.find]
+exclude =
+    tests
+    tests.*
+    testScripts
+    testScripts.*
+
+[options.extras_require]
+dev =
+    pytest>=7.0.0
+    pytest-cov>=4.0.0
+
+[options.entry_points]
+console_scripts =
+    datapy = datapy.__main__:main
+
+[options.package_data]
+datapy =
+    py.typed
+    mod_registry.json
+
+[bdist_wheel]
+universal = 0
+
+[tool:pytest]
+testpaths = tests
+python_files = test_*.py
+python_classes = Test*
+python_functions = test_*
+addopts =
+    --verbose
+    --strict-markers
+    --cov=datapy
+    --cov-report=term-missing
+    --cov-report=html
+    --cov-report=xml
+
+[coverage:run]
+source = datapy
+omit =
+    */tests/*
+    */testScripts/*
+    */__pycache__/*
+
+[coverage:report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+
+[flake8]
+max-line-length = 120
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .eggs,
+    *.egg-info,
+    .venv,
+    venv
+ignore = E203, E266, E501, W503
+per-file-ignores =
+    __init__.py:F401
+
+[mypy]
+python_version = 3.12
+warn_return_any = True
+warn_unused_configs = True
+disallow_untyped_defs = False
+ignore_missing_imports = True
+
+[isort]
+profile = black
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = True
+force_grid_wrap = 0
+use_parentheses = True
+ensure_newline_before_comments = True
