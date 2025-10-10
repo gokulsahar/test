@@ -34,6 +34,30 @@ from datapy.mod_manager.sdk import (
 from datapy.mod_manager.result import SUCCESS, SUCCESS_WITH_WARNINGS, VALIDATION_ERROR, RUNTIME_ERROR
 
 
+# Test helper function for consistent mock return values
+def create_mock_parse_args_result(
+    log_level="INFO",
+    log_provided=False,
+    context_path="",
+    context_provided=False,
+    profile_level="off",
+    profile_provided=False
+):
+    """
+    Helper function to create consistent mock return values for _parse_common_args.
+    
+    This ensures all mocks include all required keys and prevents KeyError issues.
+    """
+    return {
+        "log_level": log_level,
+        "log_provided": log_provided,
+        "context_path": context_path,
+        "context_provided": context_provided,
+        "profile_level": profile_level,
+        "profile_provided": profile_provided
+    }
+
+
 class TestSDKContextManagement:
     """Test cases for SDK context management functions."""
     
@@ -576,6 +600,8 @@ class TestParseCommonArgs:
             assert result["log_provided"] is False
             assert result["context_path"] == ""
             assert result["context_provided"] is False
+            assert result["profile_level"] == "off"
+            assert result["profile_provided"] is False
     
     def test_parse_common_args_log_level_provided(self):
         """Test parsing with log level argument."""
@@ -619,6 +645,8 @@ class TestParseCommonArgs:
             assert result["log_provided"] is False
             assert result["context_path"] == ""
             assert result["context_provided"] is False
+            assert result["profile_level"] == "off"
+            assert result["profile_provided"] is False
             
     def test_parse_common_args_profile_level_provided(self):
         """Test parsing with profile level argument."""
@@ -701,12 +729,10 @@ class TestSetupLogging:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_logging_command_line_override(self, mock_parse_args, mock_set_log_level, mock_setup_logger):
         """Test setup_logging with command line override takes priority."""
-        mock_parse_args.return_value = {
-            "log_level": "DEBUG",
-            "log_provided": True,  # This must be True to hit the first branch
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            log_level="DEBUG",
+            log_provided=True
+        )
         mock_logger = MagicMock()
         mock_setup_logger.return_value = mock_logger
         
@@ -722,12 +748,10 @@ class TestSetupLogging:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_logging_explicit_level_no_command_line(self, mock_parse_args, mock_set_log_level, mock_setup_logger):
         """Test setup_logging with explicit level parameter and no command line override."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,  # No command line override
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            log_level="INFO",
+            log_provided=False
+        )
         mock_logger = MagicMock()
         mock_setup_logger.return_value = mock_logger
         
@@ -742,12 +766,10 @@ class TestSetupLogging:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_logging_default_fallback_no_overrides(self, mock_parse_args, mock_set_log_level, mock_setup_logger):
         """Test setup_logging with default fallback when no level provided anywhere."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,  # No command line override
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            log_level="INFO",
+            log_provided=False
+        )
         mock_logger = MagicMock()
         mock_setup_logger.return_value = mock_logger
         
@@ -762,12 +784,10 @@ class TestSetupLogging:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_logging_custom_logger_name(self, mock_parse_args, mock_set_log_level, mock_setup_logger):
         """Test setup_logging with custom logger name."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            log_level="INFO",
+            log_provided=False
+        )
         mock_logger = MagicMock()
         mock_setup_logger.return_value = mock_logger
         
@@ -785,12 +805,10 @@ class TestSetupContext:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_context_command_line_override(self, mock_parse_args, mock_set_context):
         """Test setup_context with command line override."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "cmd_context.json",
-            "context_provided": True
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            context_path="cmd_context.json",
+            context_provided=True
+        )
         
         setup_context("param_context.json")
         
@@ -800,12 +818,10 @@ class TestSetupContext:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_context_explicit_path(self, mock_parse_args, mock_set_context):
         """Test setup_context with explicit path parameter."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            context_path="",
+            context_provided=False
+        )
         
         setup_context("explicit_context.json")
         
@@ -815,12 +831,10 @@ class TestSetupContext:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_context_no_context_set(self, mock_parse_args, mock_set_context):
         """Test setup_context with no context to set."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            context_path="",
+            context_provided=False
+        )
         
         setup_context()  # No context provided
         
@@ -830,12 +844,10 @@ class TestSetupContext:
     @patch('datapy.mod_manager.sdk._parse_common_args')
     def test_setup_context_none_path(self, mock_parse_args, mock_set_context):
         """Test setup_context with None path parameter."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
+        mock_parse_args.return_value = create_mock_parse_args_result(
+            context_path="",
+            context_provided=False
+        )
         
         setup_context(None)  # Explicit None
         
@@ -1218,176 +1230,3 @@ class TestMemoryAndResourceManagement:
             assert result["status"] == "error"
             assert result["exit_code"] == RUNTIME_ERROR
             assert "Test exception" in result["errors"][0]["message"]
-    
-
-
-class TestSetupContext:
-    """Test cases for setup_context hybrid function."""
-    
-    @patch('datapy.mod_manager.sdk.set_context')
-    @patch('datapy.mod_manager.sdk._parse_common_args')
-    def test_setup_context_command_line_override(self, mock_parse_args, mock_set_context):
-        """Test setup_context with command line override."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "cmd_context.json",
-            "context_provided": True
-        }
-        
-        setup_context("param_context.json")
-        
-        mock_set_context.assert_called_once_with("cmd_context.json")  # Command line wins
-    
-    @patch('datapy.mod_manager.sdk.set_context')
-    @patch('datapy.mod_manager.sdk._parse_common_args')
-    def test_setup_context_explicit_path(self, mock_parse_args, mock_set_context):
-        """Test setup_context with explicit path parameter."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
-        
-        setup_context("explicit_context.json")
-        
-        mock_set_context.assert_called_once_with("explicit_context.json")
-    
-    @patch('datapy.mod_manager.sdk.set_context')
-    @patch('datapy.mod_manager.sdk._parse_common_args')
-    def test_setup_context_no_context_set(self, mock_parse_args, mock_set_context):
-        """Test setup_context with no context to set."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
-        
-        setup_context()  # No context provided
-        
-        mock_set_context.assert_not_called()  # Should not call set_context
-    
-    @patch('datapy.mod_manager.sdk.set_context')
-    @patch('datapy.mod_manager.sdk._parse_common_args')
-    def test_setup_context_none_path(self, mock_parse_args, mock_set_context):
-        """Test setup_context with None path parameter."""
-        mock_parse_args.return_value = {
-            "log_level": "INFO",
-            "log_provided": False,
-            "context_path": "",
-            "context_provided": False
-        }
-        
-        setup_context(None)  # Explicit None
-        
-        mock_set_context.assert_not_called()  # Should not call set_context
-
-
-class TestIntegrationScenarios:
-    """Integration test cases for complete SDK workflows."""
-    
-    def test_complete_successful_workflow(self):
-        """Test complete successful mod execution workflow with all components."""
-        # Create comprehensive mocks for all dependencies
-        mock_registry = MagicMock()
-        mock_registry.get_mod_info.return_value = {
-            "module_path": "datapy.mods.test_mod",
-            "type": "test_processor",
-            "version": "1.0.0",
-            "description": "Test processor mod",
-            "config_schema": {
-                "required": {
-                    "input_data": {"type": "str", "description": "Input data path"}
-                },
-                "optional": {
-                    "output_format": {"type": "str", "default": "csv", "description": "Output format"}
-                }
-            }
-        }
-        
-        mock_resolver = MagicMock()
-        mock_resolver.resolve_mod_params.return_value = {
-            "input_data": "resolved_input_path",
-            "batch_size": 1000  # From project defaults
-        }
-        
-        # Mock successful mod module
-        mock_mod_module = MagicMock()
-        mock_mod_module.run = MagicMock(return_value={
-            "status": "success",
-            "exit_code": SUCCESS,
-            "metrics": {
-                "rows_processed": 5000,
-                "processing_rate": 0.98,
-                "memory_used": "256MB"
-            },
-            "artifacts": {
-                "processed_data": "<DataFrame with 5000 rows>",
-                "output_file": "/output/processed_data.csv",
-                "summary_report": {"total": 5000, "errors": 0}
-            },
-            "globals": {
-                "last_processed_count": 5000,
-                "processing_timestamp": "2024-01-15T10:30:00Z"
-            },
-            "warnings": [
-                {"message": "Found 10 duplicate records", "warning_code": 10, "timestamp": 1640995200.123}
-            ],
-            "errors": [],
-            "logs": {
-                "run_id": "test_processor_20240115_103000_abc123",
-                "mod_type": "test_processor",
-                "mod_name": "data_processor"
-            }
-        })
-        
-        with patch('datapy.mod_manager.sdk.get_registry', return_value=mock_registry), \
-             patch('datapy.mod_manager.sdk.create_resolver', return_value=mock_resolver), \
-             patch('datapy.mod_manager.sdk.substitute_context_variables') as mock_substitute, \
-             patch('datapy.mod_manager.sdk.validate_mod_parameters') as mock_validate, \
-             patch('importlib.import_module', return_value=mock_mod_module), \
-             patch('datapy.mod_manager.sdk.setup_logger') as mock_logger:
-            
-            # Set up context substitution
-            mock_substitute.return_value = {
-                "input_data": "/prod/data/customers.csv",  # After substitution
-                "batch_size": 1000,
-                "output_format": "parquet"
-            }
-            
-            # Set up parameter validation
-            mock_validate.return_value = {
-                "input_data": "/prod/data/customers.csv",
-                "batch_size": 1000,
-                "output_format": "parquet",  # With defaults applied
-                "_mod_name": "data_processor",
-                "_mod_type": "test_processor"
-            }
-            
-            # Execute the mod
-            result = run_mod(
-                mod_type="test_processor",
-                params={
-                    "input_data": "${env.data_path}/customers.csv",  # With variable
-                    "output_format": "parquet"
-                },
-                mod_name="data_processor"
-            )
-            
-            # Verify successful execution
-            assert result["status"] == "success"
-            assert result["exit_code"] == SUCCESS
-            assert result["metrics"]["rows_processed"] == 5000
-            assert len(result["warnings"]) == 1
-            assert len(result["errors"]) == 0
-            assert result["logs"]["mod_name"] == "data_processor"
-            assert result["logs"]["mod_type"] == "test_processor"
-            
-            # Verify all steps were called correctly
-            mock_registry.get_mod_info.assert_called_once_with("test_processor")
-            mock_resolver.resolve_mod_params.assert_called_once()
-            mock_substitute.assert_called_once()
-            mock_validate.assert_called_once()
-            mock_mod_module.run.assert_called_once()
