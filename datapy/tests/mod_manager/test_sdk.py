@@ -547,8 +547,7 @@ class TestRunMod:
             patch('datapy.mod_manager.sdk._resolve_mod_parameters', return_value={}), \
             patch('datapy.mod_manager.sdk.substitute_context_variables', return_value={}), \
             patch('datapy.mod_manager.sdk.validate_mod_parameters', return_value={}), \
-            patch('datapy.mod_manager.sdk._execute_mod_function', return_value=mock_mod_module.run.return_value), \
-            patch('datapy.mod_manager.execution_monitoring.execute_with_monitoring', return_value=mock_mod_module.run.return_value):
+            patch('datapy.mod_manager.sdk._execute_mod_function', return_value=mock_mod_module.run.return_value):
             
             result = run_mod("  test_reader  ", {"input": "param"}, "  test_mod  ")
             

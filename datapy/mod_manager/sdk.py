@@ -15,7 +15,6 @@ from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
 from .registry import get_registry
 from .parameter_validation import validate_mod_parameters
-from .execution_monitoring import execute_with_monitoring
 
 logger = setup_logger(__name__)
 
@@ -215,9 +214,6 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
         # Basic execution
         result = run_mod("csv_reader", {"file_path": "data.csv"})
         
-        # Check monitoring metrics
-        monitoring = result.get("metrics", {}).get("execution_monitoring", {})
-        print(f"Memory used: {monitoring.get('memory_delta_mb')}MB")
     """
     try:
         # Clean and validate inputs
@@ -265,12 +261,7 @@ def run_mod(mod_type: str, params: Dict[str, Any], mod_name: Optional[str] = Non
             return validation_error(mod_name, str(e))
         
         # 5. Execute mod function with monitoring (NEW - added execution monitoring)
-        return execute_with_monitoring(
-            mod_type,
-            params,
-            mod_name,
-            lambda mt, p, mn: _execute_mod_function(mod_info, validated_params, mod_name)
-        )
+        return _execute_mod_function(mod_info, validated_params, mod_name)
 
     except ValueError as e:
         return validation_error(mod_name or "unknown", str(e))
