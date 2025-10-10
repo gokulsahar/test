@@ -619,6 +619,78 @@ class TestParseCommonArgs:
             assert result["log_provided"] is False
             assert result["context_path"] == ""
             assert result["context_provided"] is False
+            
+    def test_parse_common_args_profile_level_provided(self):
+        """Test parsing with profile level argument."""
+        with patch('sys.argv', ['script.py', '--profile-level', 'low']):
+            result = _parse_common_args()
+            
+            assert result["profile_level"] == "low"
+            assert result["profile_provided"] is True
+
+    def test_parse_common_args_profile_level_high(self):
+        """Test parsing with high profile level."""
+        with patch('sys.argv', ['script.py', '--profile-level', 'high']):
+            result = _parse_common_args()
+            
+            assert result["profile_level"] == "high"
+            assert result["profile_provided"] is True
+
+    def test_parse_common_args_profile_level_off(self):
+        """Test parsing with off profile level."""
+        with patch('sys.argv', ['script.py', '--profile-level', 'off']):
+            result = _parse_common_args()
+            
+            assert result["profile_level"] == "off"
+            assert result["profile_provided"] is True
+
+    def test_parse_common_args_profile_level_not_provided(self):
+        """Test parsing without profile level defaults to off."""
+        with patch('sys.argv', ['script.py']):
+            result = _parse_common_args()
+            
+            assert result["profile_level"] == "off"
+            assert result["profile_provided"] is False
+
+    def test_parse_common_args_all_arguments_provided(self):
+        """Test parsing with all arguments including profile level."""
+        with patch('sys.argv', ['script.py', '--log-level', 'DEBUG', '--context', 'prod.json', '--profile-level', 'medium']):
+            result = _parse_common_args()
+            
+            assert result["log_level"] == "DEBUG"
+            assert result["log_provided"] is True
+            assert result["context_path"] == "prod.json"
+            assert result["context_provided"] is True
+            assert result["profile_level"] == "medium"
+            assert result["profile_provided"] is True
+
+    def test_parse_common_args_profile_level_case_handling(self):
+        """Test profile level is converted to lowercase."""
+        with patch('sys.argv', ['script.py', '--profile-level', 'LOW']):
+            result = _parse_common_args()
+            
+            assert result["profile_level"] == "low"  # Should be lowercase
+
+    def test_parse_common_args_parsing_failure_includes_profile(self):
+        """Test parsing failure returns safe defaults including profile_level."""
+        with patch('argparse.ArgumentParser.parse_known_args', side_effect=Exception("Parse error")):
+            result = _parse_common_args()
+            
+            assert result["log_level"] == "INFO"
+            assert result["log_provided"] is False
+            assert result["context_path"] == ""
+            assert result["context_provided"] is False
+            assert result["profile_level"] == "off"
+            assert result["profile_provided"] is False
+
+    def test_parse_common_args_profile_with_extra_args(self):
+        """Test profile level parsing with extra unknown arguments."""
+        with patch('sys.argv', ['script.py', '--profile-level', 'low', '--unknown-arg', 'value']):
+            result = _parse_common_args()
+            
+            # Should parse profile level and ignore unknown args
+            assert result["profile_level"] == "low"
+            assert result["profile_provided"] is True
 
 
 class TestSetupLogging:

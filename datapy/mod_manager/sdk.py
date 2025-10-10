@@ -280,10 +280,12 @@ def _parse_common_args() -> Dict[str, Any]:
     Returns:
         Dictionary with parsed arguments and flags:
         {
-            "log_level": str,        # Log level value
-            "log_provided": bool,    # Was --log-level explicitly provided?
-            "context_path": str,     # Context file path  
-            "context_provided": bool # Was --context explicitly provided?
+            "log_level": str,          # Log level value
+            "log_provided": bool,      # Was --log-level explicitly provided?
+            "context_path": str,       # Context file path  
+            "context_provided": bool,  # Was --context explicitly provided?
+            "profile_level": str,      # Profile level value
+            "profile_provided": bool   # Was --profile-level explicitly provided?
         }
     """
     try:
@@ -292,6 +294,10 @@ def _parse_common_args() -> Dict[str, Any]:
                            choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
         parser.add_argument('--context', 
                            help='Path to context JSON file for variable substitution')
+        parser.add_argument('--profile-level',
+                           choices=['off', 'low', 'medium', 'high'],
+                           type=str.lower,
+                           help='Profiling detail level (default: off)')
         
         # Parse known args only, ignore everything else
         args, _ = parser.parse_known_args()
@@ -300,7 +306,9 @@ def _parse_common_args() -> Dict[str, Any]:
             "log_level": args.log_level.upper() if args.log_level else "INFO",
             "log_provided": args.log_level is not None,
             "context_path": args.context if args.context else "",
-            "context_provided": args.context is not None
+            "context_provided": args.context is not None,
+            "profile_level": args.profile_level.lower() if args.profile_level else "off",
+            "profile_provided": args.profile_level is not None
         }
         
     except Exception:
@@ -309,7 +317,9 @@ def _parse_common_args() -> Dict[str, Any]:
             "log_level": "INFO",
             "log_provided": False,
             "context_path": "",
-            "context_provided": False
+            "context_provided": False,
+            "profile_level": "off",
+            "profile_provided": False
         }
 
 
