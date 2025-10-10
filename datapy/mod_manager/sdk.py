@@ -309,7 +309,7 @@ def _parse_common_args() -> Dict[str, Any]:
             "context_provided": args.context is not None,
             "profile_level": args.profile_level.lower() if args.profile_level else "off",
             "profile_provided": args.profile_level is not None
-        }
+        } 
         
     except Exception:
         # Any failure - return safe defaults
