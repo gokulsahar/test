@@ -57,7 +57,7 @@ class TabDelimitedFormatter(logging.Formatter):
         if record.levelno >= logging.WARNING:
             self._add_stack_trace(record, extra_fields)
             return self._format_error_log(
-                timestamp, logger_name, message, 
+                timestamp, level, logger_name, message,  
                 mod_type, mod_name, extra_fields
             )
         
@@ -115,6 +115,7 @@ class TabDelimitedFormatter(logging.Formatter):
     def _format_error_log(
         self,
         timestamp: str,
+        level: str,
         logger_name: str,
         message: str,
         mod_type: str,
@@ -126,6 +127,7 @@ class TabDelimitedFormatter(logging.Formatter):
         
         Args:
             timestamp: ISO format timestamp
+            level: Log level name (WARNING, ERROR, CRITICAL)  
             logger_name: Name of the logger
             message: Log message
             mod_type: Mod type context
@@ -137,7 +139,7 @@ class TabDelimitedFormatter(logging.Formatter):
         """
         lines = [
             "=" * 80,
-            f"ERROR: {message}",
+            f"{level}: {message}",
             f"Time: {timestamp} | Logger: {logger_name}"
         ]
         

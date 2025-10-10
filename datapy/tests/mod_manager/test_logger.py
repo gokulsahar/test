@@ -167,6 +167,31 @@ class TestTabDelimitedFormatter:
         assert "ValueError: Test exception" in formatted
         assert "Traceback" in formatted
     
+    def test_warning_formatting(self):
+        """Test formatting of WARNING level logs."""
+        record = logging.LogRecord(
+            name="test.logger",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=10,
+            msg="This is a warning",
+            args=(),
+            exc_info=None
+        )
+        record.created = 1640995200.123
+        
+        formatted = self.formatter.format(record)
+        
+        # For WARNING level, formatter uses multi-line format
+        # Verify it's multi-line (contains newlines)
+        assert '\n' in formatted
+        
+        # Verify warning message is present with correct level
+        assert "WARNING: This is a warning" in formatted
+        
+        # Verify stack trace section is present for warnings
+        assert "Stack Trace:" in formatted
+    
     def test_non_serializable_extra_fields(self):
         """Test handling of non-JSON-serializable extra fields."""
         record = logging.LogRecord(
