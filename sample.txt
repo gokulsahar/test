@@ -1,210 +1,57 @@
-"""
-Simple JSON utility for reading and writing JSON files.
+🧭 1️⃣ HOW Rating – Leadership
 
-Provides basic JSON file operations with proper error handling.
-"""
+Rating: Exemplary
 
-import json
-from pathlib import Path
-from typing import Any, Dict, List, Union
+Answer:
 
+Spearheaded multiple innovation-driven initiatives that enhanced developer efficiency and organizational productivity.
 
-def read_json(file_path: str) -> Union[Dict, List]:
-    """
-    Read and parse JSON file.
-    
-    Args:
-        file_path: Path to JSON file
-        
-    Returns:
-        Parsed JSON data (dict or list)
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        ValueError: If JSON is malformed
-    """
-    path = Path(file_path)
-    
-    if not path.exists():
-        raise FileNotFoundError(f"JSON file not found: {file_path}")
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {file_path}: {str(e)}")
+Architected the Python-based ETL Modernization Framework, establishing the foundation for Talend-to-Python migration — shortlisted for Innersource adoption, reflecting architectural excellence and thought leadership.
 
+Created the “Subtasker” application, enabling seamless Jira subtask tracking — now with 100+ active users — and featured at TechCon 2025 under the Dev Productivity Booth, showcasing engineering creativity and impact.
 
-def write_json(
-    file_path: str, 
-    data: Union[Dict, List], 
-    indent: int = 2,
-    create_dirs: bool = True
-) -> None:
-    """
-    Write data to JSON file.
-    
-    Args:
-        file_path: Path to output JSON file
-        data: Data to write (dict or list)
-        indent: Indentation level for pretty printing (default: 2)
-        create_dirs: Create parent directories if needed (default: True)
-        
-    Raises:
-        ValueError: If data is not JSON-serializable
-    """
-    path = Path(file_path)
-    
-    # Create parent directories if needed
-    if create_dirs and not path.parent.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=indent, ensure_ascii=False)
-    except (TypeError, ValueError) as e:
-        raise ValueError(f"Data is not JSON-serializable: {str(e)}")
+Pioneered AI adoption initiatives, conducting POCs and demos with Devin, Stylus, Squad, and Delphine, demonstrating how generative AI can accelerate ETL modernization, code generation, and workflow automation.
 
+Mentored peers and promoted knowledge sharing on modern data engineering and AI-assisted development practices, fostering a culture of continuous learning and innovation.
 
-def read_value(file_path: str, key_path: str) -> Any:
-    """
-    Read specific value from JSON file using dot notation.
-    
-    Args:
-        file_path: Path to JSON file
-        key_path: Dot-separated path to value (e.g., "database.host")
-        
-    Returns:
-        Value at specified path
-        
-    Raises:
-        KeyError: If key path doesn't exist
-        
-    Example:
-        value = read_value("config.json", "database.host")
-    """
-    data = read_json(file_path)
-    keys = key_path.split('.')
-    
-    current = data
-    for key in keys:
-        if isinstance(current, dict):
-            if key not in current:
-                raise KeyError(f"Key '{key}' not found in path '{key_path}'")
-            current = current[key]
-        else:
-            raise KeyError(f"Cannot traverse '{key}' - parent is not a dict")
-    
-    return current
+🛡️ 2️⃣ WHAT Rating – Risk & Control
 
+Rating: Exemplary
 
-def update_value(file_path: str, key_path: str, value: Any) -> None:
-    """
-    Update specific value in JSON file using dot notation.
-    
-    Args:
-        file_path: Path to JSON file
-        key_path: Dot-separated path to value (e.g., "database.port")
-        value: New value to set
-        
-    Raises:
-        KeyError: If key path doesn't exist
-        
-    Example:
-        update_value("config.json", "database.port", 5432)
-    """
-    data = read_json(file_path)
-    keys = key_path.split('.')
-    
-    # Navigate to parent of target key
-    current = data
-    for key in keys[:-1]:
-        if isinstance(current, dict):
-            if key not in current:
-                raise KeyError(f"Key '{key}' not found in path '{key_path}'")
-            current = current[key]
-        else:
-            raise KeyError(f"Cannot traverse '{key}' - parent is not a dict")
-    
-    # Update the final key
-    if not isinstance(current, dict):
-        raise KeyError(f"Cannot set value - parent is not a dict")
-    
-    final_key = keys[-1]
-    if final_key not in current:
-        raise KeyError(f"Key '{final_key}' not found in path '{key_path}'")
-    
-    current[final_key] = value
-    
-    # Write back to file
-    write_json(file_path, data)
+Answer:
 
+Maintained 100% compliance with delivery commitments — zero production defects, no SLA breaches, and consistent on-time delivery.
 
-def json_operation(operation: str, **kwargs) -> Any:
-    """
-    Universal JSON operation wrapper.
-    
-    Args:
-        operation: Operation type - "read", "write", "read_value", "update_value"
-        **kwargs: Operation-specific parameters
-        
-    Returns:
-        Result of operation (for read operations) or None (for write operations)
-        
-    Raises:
-        ValueError: If operation is invalid or required params missing
-        
-    Examples:
-        # Read entire file
-        data = json_operation("read", file_path="config.json")
-        
-        # Write entire file
-        json_operation("write", file_path="output.json", data={"key": "value"})
-        
-        # Read specific value
-        host = json_operation("read_value", file_path="config.json", key_path="database.host")
-        
-        # Update specific value
-        json_operation("update_value", file_path="config.json", key_path="database.port", value=5432)
-    """
-    operations = {
-        "read": _handle_read,
-        "write": _handle_write,
-        "read_value": _handle_read_value,
-        "update_value": _handle_update_value
-    }
-    
-    if operation not in operations:
-        valid_ops = ", ".join(operations.keys())
-        raise ValueError(f"Invalid operation '{operation}'. Valid operations: {valid_ops}")
-    
-    return operations[operation](**kwargs)
+Ensured strong risk and governance adherence, maintaining precise Jira updates, timesheet discipline, and control compliance with no defaulter record.
 
+Designed all automation tools with secure configurations, audit-ready logging, and controlled access, ensuring safe adoption and operational reliability.
 
-def _handle_read(file_path: str, **kwargs) -> Union[Dict, List]:
-    """Handle read operation."""
-    return read_json(file_path)
+Embedded robust failure handling and traceability in automation workflows, aligning every innovation with enterprise quality and control standards.
 
+💰 3️⃣ Financial Performance
 
-def _handle_write(file_path: str, data: Union[Dict, List], indent: int = 2, 
-                  create_dirs: bool = True, **kwargs) -> None:
-    """Handle write operation."""
-    if data is None:
-        raise ValueError("'data' parameter is required for write operation")
-    write_json(file_path, data, indent=indent, create_dirs=create_dirs)
+Rating: Exemplary
 
+Answer:
 
-def _handle_read_value(file_path: str, key_path: str, **kwargs) -> Any:
-    """Handle read_value operation."""
-    if not key_path:
-        raise ValueError("'key_path' parameter is required for read_value operation")
-    return read_value(file_path, key_path)
+Delivered high-impact automation that directly improved efficiency and cost effectiveness — for instance, the DataLoader tool automated ad hoc tester data loads, the Subtasker tool for task management etc. saving several person-hours per cycle.
 
+WarDeployer automated package hosting for tools like Dora Metrics, cutting deployment turnaround time and reducing manual intervention costs.
 
-def _handle_update_value(file_path: str, key_path: str, value: Any, **kwargs) -> None:
-    """Handle update_value operation."""
-    if not key_path:
-        raise ValueError("'key_path' parameter is required for update_value operation")
-    if value is None:
-        raise ValueError("'value' parameter is required for update_value operation")
-    update_value(file_path, key_path, value)
+The Python ETL Framework reduces dependency on licensed tools, driving significant long-term cost optimization and aligning with modernization and open-source adoption goals.
+
+AI-based productivity experiments (Devin, Stylus, Squad, Delphine) demonstrated how intelligent automation can scale output while reducing effort, contributing to measurable financial and operational gains.
+
+🤝 4️⃣ Client & Franchise Outcome
+
+Rating: Exemplary
+
+Answer:
+
+Developed organization-wide automation solutions that improved transparency and performance visibility — including the automated Jira metrics pipeline that reports logged hours and productivity insights to leadership.
+
+Showcased AI-driven POCs and workflow enhancements, helping leadership visualize practical applications of AI in data engineering
+
+Tools such as Subtasker, WarDeployer, and DataLoader have evolved into franchise-grade enablers, boosting stakeholder confidence and overall delivery quality.
+
+Through consistent innovation and cross-functional collaboration, advanced the organization’s AI-readiness and modernization roadmap, enhancing both internal and client-facing outcomes.
