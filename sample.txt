@@ -1,0 +1,493 @@
+# TASK: Implement Kafka Streaming Mods for DataPy Framework
+
+## OBJECTIVE
+Create production-ready Kafka streaming components (mods and utilities) for the DataPy ETL framework based on the attached specification document. These components will replace existing Talend Kafka jobs with modern Python streaming capabilities.
+
+## CONTEXT
+You are implementing streaming capabilities for an existing ETL framework called DataPy. The framework uses a modular architecture where "mods" are reusable components that users invoke via `run_mod()`. Review the existing codebase structure first to understand:
+- How mods are structured (see `datapy/mods/sources/` or `datapy/mods/transforms/`)
+- ModResult format and error handling patterns
+- ConfigSchema validation approach
+- Existing logging setup (tab-delimited format)
+- How the SDK works (`datapy/mod_manager/sdk.py`)
+
+## CRITICAL REQUIREMENTS
+
+### Code Quality Standards
+- ✅ **≤200 LOC per file** (enforced strictly)
+- ✅ **Industry-standard Python** (type hints, docstrings, clean code)
+- ✅ **Production-ready** (comprehensive error handling, logging)
+- ✅ **Follow existing DataPy patterns** (match structure of existing mods)
+- ✅ **No placeholder/stub code** (fully functional implementations)
+
+### Framework Integration
+- ✅ Use existing `ModResult`, `ModMetadata`, `ConfigSchema` classes
+- ✅ Use existing logger setup: `from datapy.mod_manager.logger import setup_logger`
+- ✅ Follow existing mod file structure and naming conventions
+- ✅ Register mods in registry (if registration code exists)
+
+### Dependencies
+- ✅ Add `confluent-kafka>=2.3.0` to requirements.txt
+- ✅ Use only approved libraries (confluent-kafka, polars, duckdb, standard library)
+- ✅ No unnecessary dependencies
+
+## IMPLEMENTATION CHECKLIST
+
+Create these 4 components in order:
+
+### 1. StreamController Utility
+**File:** `datapy/utils/stream_controller.py`
+**Size:** ≤100 LOC
+**Requirements:**
+- Signal handling for SIGTERM and SIGINT
+- Thread-safe implementation (use threading.Event and threading.Lock)
+- Methods: `should_stop()`, `request_stop()`, `is_shutdown_initiated()`
+- Store original signal handlers and restore on cleanup
+- Comprehensive docstrings
+
+**Implementation Notes:**
+- This is a utility class, NOT a mod (no ModResult/ModMetadata)
+- Must work in all environments: local dev (Ctrl+C), Docker, OpenShift
+- See specification section "5. Component 4: StreamController Utility"
+
+---
+
+### 2. kafka_connector Mod
+**File:** `datapy/mods/streaming/kafka_connector.py`
+**Size:** ≤200 LOC
+**Requirements:**
+- Establish Kafka connection with authentication
+- Support SASL/SSL (username/password) AND mutual TLS (client certificates)
+- Security protocols: PLAINTEXT, SASL_SSL, SASL_PLAINTEXT, SSL
+- SASL mechanisms: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+- Test connection with AdminClient.list_topics() before returning
+- Return connection config object (create KafkaConnectionConfig class)
+- Proper error handling with error codes 30-34
+
+**Configuration Parameters:**
+```python
+Required: bootstrap_servers
+Optional: security_protocol, sasl_mechanism, sasl_username, sasl_password,
+          ssl_ca_location, ssl_cert_location, ssl_key_location, 
+          ssl_key_password, additional_config (dict for power users)
+```
+
+**Output Artifacts:**
+- connection: KafkaConnectionConfig object containing librdkafka config dict
+
+**Implementation Notes:**
+- Create a helper class `KafkaConnectionConfig` to wrap connection details
+- Validate SASL credentials if security_protocol is SASL_*
+- Validate SSL certificate paths exist if provided
+- See specification section "3.1 Component: kafka_connector Mod"
+
+---
+
+### 3. kafka_consumer Mod
+**File:** `datapy/mods/streaming/kafka_consumer.py`
+**Size:** ≤200 LOC (this is the most complex component)
+**Requirements:**
+- Infinite poll loop (like Talend tKafkaInput)
+- Call user's `message_processor` callback for each message
+- Auto-create StreamController if not provided (optional parameter)
+- Commit strategy: per_message (manual commit) in v1.0
+- Error handling modes: continue, retry (with exponential backoff), stop
+- Graceful shutdown on SIGTERM/SIGINT
+- Periodic summary logging (not per-message by default)
+
+**Configuration Parameters:**
+```python
+Required: connection, topics (list), group_id, message_processor (callable)
+Optional: auto_offset_reset, commit_strategy, on_error, max_retries,
+          retry_backoff_ms, controller, shutdown_drain_timeout_s,
+          log_summary_interval, log_message_details, additional_consumer_config
+```
+
+**Message Format Passed to User Callback:**
+```python
+{
+    "key": str | None,
+    "value": str | bytes,
+    "topic": str,
+    "partition": int,
+    "offset": int,
+    "timestamp": int,
+    "headers": dict,
+    "_raw_message": Message  # Original confluent_kafka.Message
+}
+```
+
+**User Callback Return Format:**
+```python
+{"status": "success"}  # or
+{"status": "error", "error": "reason"}
+```
+
+**Implementation Notes:**
+- Import StreamController: `from datapy.utils.stream_controller import StreamController`
+- Create Consumer from confluent_kafka: `from confluent_kafka import Consumer`
+- Set `enable.auto.commit = False` for manual commit control
+- Implement retry logic as separate helper function (with exponential backoff)
+- Handle consumer.poll() returning None (no message available)
+- Log summary every N messages (configurable, default 1000)
+- Optional per-message logging controlled by `log_message_details` parameter
+- Graceful shutdown sequence: stop polling → drain in-flight → commit → close
+- See specification section "3.2 Component: kafka_consumer Mod"
+
+**Critical Implementation Details:**
+```python
+while not controller.should_stop():
+    msg = consumer.poll(timeout=1.0)
+    if msg is None:
+        continue
+    if msg.error():
+        handle_error(msg.error())
+        continue
+    
+    # Build message dict
+    message_dict = {...}
+    
+    # Call user's processor
+    result = message_processor(message_dict)
+    
+    # Handle result based on on_error config
+    if result["status"] == "success":
+        consumer.commit(message=msg)
+    else:
+        handle_processing_error(result, msg)
+```
+
+---
+
+### 4. kafka_producer Mod
+**File:** `datapy/mods/streaming/kafka_producer.py`
+**Size:** ≤150 LOC
+**Requirements:**
+- Send data to Kafka topics (synchronous, request-based)
+- Accept multiple data formats: Polars DataFrame, dict, list of dicts, LazyFrame
+- Serialize to JSON, string, or bytes
+- Support message keys (for partitioning): key_column or key_value
+- Support message headers
+- Flush after send (wait for broker acknowledgment)
+- Error handling: raise or log
+
+**Configuration Parameters:**
+```python
+Required: connection, topic, data
+Optional: key_column, key_value, value_format (json|string|bytes),
+          headers (dict), flush_after_send, flush_timeout_s,
+          on_send_error (raise|log), additional_producer_config
+```
+
+**Implementation Notes:**
+- Import Producer from confluent_kafka: `from confluent_kafka import Producer`
+- Convert all data formats to list of dicts before sending
+- Handle LazyFrames by calling .collect() first
+- Serialize values based on value_format parameter
+- Extract message key from data if key_column specified
+- Use delivery callback for tracking send failures
+- producer.flush() to wait for acknowledgments
+- See specification section "3.3 Component: kafka_producer Mod"
+
+**Helper Functions Needed:**
+```python
+def convert_data_to_messages(data) -> List[dict]:
+    """Convert DataFrame/dict/list to list of dicts."""
+    
+def serialize_value(msg_dict, format: str) -> bytes:
+    """Serialize message value to bytes."""
+    
+def get_message_key(msg_dict, params) -> bytes | None:
+    """Extract or generate message key."""
+    
+def delivery_callback(err, msg):
+    """Handle delivery reports."""
+```
+
+---
+
+## FILE STRUCTURE TO CREATE
+```
+datapy/
+├── mods/
+│   └── streaming/
+│       ├── __init__.py                    # CREATE: Empty or import statements
+│       ├── kafka_connector.py             # CREATE: Component 2
+│       ├── kafka_consumer.py              # CREATE: Component 3
+│       └── kafka_producer.py              # CREATE: Component 4
+│
+└── utils/
+    └── stream_controller.py               # CREATE: Component 1
+
+# Also update:
+requirements.txt                           # ADD: confluent-kafka>=2.3.0
+```
+
+---
+
+## VERIFICATION CHECKLIST
+
+After implementation, verify:
+
+### Code Quality
+- [ ] All files ≤200 LOC (use line counter)
+- [ ] Type hints on all function signatures
+- [ ] Comprehensive docstrings (module, class, function level)
+- [ ] No TODO/FIXME/placeholder comments
+- [ ] Clean, readable code (no code smells)
+
+### Functionality
+- [ ] StreamController handles SIGTERM and SIGINT correctly
+- [ ] kafka_connector validates credentials and tests connection
+- [ ] kafka_consumer runs infinite loop and calls user callback
+- [ ] kafka_consumer auto-creates controller if not provided
+- [ ] kafka_consumer commits offsets after successful processing
+- [ ] kafka_consumer handles graceful shutdown (Ctrl+C)
+- [ ] kafka_consumer retry logic works with exponential backoff
+- [ ] kafka_producer serializes and sends messages
+- [ ] kafka_producer handles multiple data formats
+
+### Integration
+- [ ] All mods follow existing DataPy patterns
+- [ ] ModResult format matches existing mods
+- [ ] Error codes are defined and used correctly
+- [ ] Logging uses existing DataPy logger
+- [ ] Config validation works (ConfigSchema)
+
+### Error Handling
+- [ ] All exceptions caught and converted to ModResult errors
+- [ ] Helpful error messages (not generic "Failed to process")
+- [ ] Network errors handled gracefully
+- [ ] Invalid parameters rejected with clear messages
+
+---
+
+## EXAMPLE USAGE (For Reference)
+
+Create these example files to demonstrate usage:
+
+### Example 1: Simple Consumer → Database
+**File:** `examples/kafka_simple_consumer.py`
+```python
+from datapy.mod_manager.sdk import run_mod, setup_logging, setup_context
+
+def main():
+    setup_logging("INFO", "kafka_simple_consumer.py")
+    setup_context("kafka_context.json")
+    
+    # Connect
+    conn = run_mod("kafka_connector", {
+        "bootstrap_servers": "${kafka.bootstrap_servers}",
+        "security_protocol": "SASL_SSL",
+        "sasl_username": "${kafka.username}",
+        "sasl_password": "${kafka.password}",
+        "ssl_ca_location": "${kafka.ca_cert}"
+    })
+    
+    if conn["status"] != "success":
+        return False
+    
+    # Consume
+    run_mod("kafka_consumer", {
+        "connection": conn["artifacts"]["connection"],
+        "topics": ["orders"],
+        "group_id": "orders-processor",
+        "message_processor": process_order
+    })
+
+def process_order(message):
+    print(f"Processing order: {message['key']}")
+    # Add your transformation logic here
+    return {"status": "success"}
+
+if __name__ == "__main__":
+    main()
+```
+
+### Example 2: Consumer → Transform → Producer
+**File:** `examples/kafka_stream_transform.py`
+```python
+from datapy.mod_manager.sdk import run_mod, setup_logging, setup_context
+
+def main():
+    setup_logging("INFO", "kafka_stream_transform.py")
+    setup_context("kafka_context.json")
+    
+    conn = run_mod("kafka_connector", {...})
+    
+    run_mod("kafka_consumer", {
+        "connection": conn["artifacts"]["connection"],
+        "topics": ["${kafka.input_topic}"],
+        "group_id": "transformer",
+        "message_processor": lambda msg: transform_and_forward(msg, conn["artifacts"]["connection"])
+    })
+
+def transform_and_forward(message, connection):
+    # Parse
+    data = json.loads(message["value"])
+    
+    # Transform
+    transformed = {
+        "id": data["order_id"],
+        "total": data["amount"] * 1.1
+    }
+    
+    # Send to output
+    run_mod("kafka_producer", {
+        "connection": connection,
+        "topic": "${kafka.output_topic}",
+        "data": transformed,
+        "key_value": str(transformed["id"])
+    })
+    
+    return {"status": "success"}
+
+if __name__ == "__main__":
+    main()
+```
+
+### Example Context JSON
+**File:** `examples/kafka_context.json`
+```json
+{
+  "kafka": {
+    "bootstrap_servers": "localhost:9092",
+    "username": "kafka-user",
+    "password": "password",
+    "ca_cert": "/path/to/ca-cert.pem",
+    "input_topic": "orders-raw",
+    "output_topic": "orders-processed"
+  }
+}
+```
+
+---
+
+## TESTING APPROACH (Manual - No Unit Tests Required)
+
+After implementation, manually test with local Kafka:
+
+### Setup Local Kafka (Docker)
+```bash
+# Start Kafka
+docker run -d --name kafka \
+  -p 9092:9092 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
+  apache/kafka:latest
+
+# Create test topic
+docker exec kafka kafka-topics --create \
+  --topic test-orders \
+  --bootstrap-server localhost:9092
+```
+
+### Test Consumer
+```bash
+# Terminal 1: Produce test messages
+echo '{"order_id": 1, "amount": 100}' | docker exec -i kafka kafka-console-producer \
+  --topic test-orders \
+  --bootstrap-server localhost:9092
+
+# Terminal 2: Run DataPy consumer
+python examples/kafka_simple_consumer.py
+
+# Verify: Consumer receives and processes message
+# Test Ctrl+C for graceful shutdown
+```
+
+### Test Producer
+```bash
+# Modify example to produce messages
+# Run and verify messages appear in topic
+docker exec kafka kafka-console-consumer \
+  --topic orders-processed \
+  --bootstrap-server localhost:9092 \
+  --from-beginning
+```
+
+---
+
+## IMPORTANT REMINDERS
+
+### What NOT to do:
+❌ Do not create test files (test_*.py) - manual testing only
+❌ Do not implement features not in specification (stick to v1.0 scope)
+❌ Do not add extra dependencies without approval
+❌ Do not create placeholder/stub functions - full implementation required
+❌ Do not exceed 200 LOC per file (split into helper functions if needed)
+❌ Do not use AI-generated boilerplate comments
+❌ Do not implement Dead Letter Queue (DLQ) - future v2.0 feature
+❌ Do not implement batch/periodic commit strategies - only per_message in v1.0
+❌ Do not implement Avro/Protobuf - only JSON in v1.0
+
+### What TO do:
+✅ Read existing DataPy mod files to understand patterns
+✅ Follow existing code style and conventions
+✅ Use existing logger, ModResult, ConfigSchema patterns
+✅ Implement comprehensive error handling
+✅ Add detailed docstrings
+✅ Keep code clean and readable (industry standard)
+✅ Test manually with local Kafka before marking complete
+✅ Create working, production-ready code
+✅ Focus on v1.0 scope only (per_message commit, continue/retry/stop errors)
+
+---
+
+## REFERENCE DOCUMENT
+
+The complete specification is attached as context. Key sections to reference:
+- Section 2: kafka_connector specification
+- Section 3: kafka_consumer specification (MOST COMPLEX)
+- Section 4: kafka_producer specification
+- Section 5: StreamController specification
+- Section 6: Integration patterns (for examples)
+- Section 7: Error handling strategy
+- Section 8: Logging strategy
+
+---
+
+## DELIVERABLES
+
+1. ✅ StreamController utility (datapy/utils/stream_controller.py)
+2. ✅ kafka_connector mod (datapy/mods/streaming/kafka_connector.py)
+3. ✅ kafka_consumer mod (datapy/mods/streaming/kafka_consumer.py)
+4. ✅ kafka_producer mod (datapy/mods/streaming/kafka_producer.py)
+5. ✅ __init__.py for streaming package (datapy/mods/streaming/__init__.py)
+6. ✅ Updated requirements.txt (add confluent-kafka>=2.3.0)
+7. ✅ Example job scripts (2-3 examples in examples/ directory)
+8. ✅ Example context JSON
+
+---
+
+## SUCCESS CRITERIA
+
+Implementation is complete when:
+1. All 4 components created and ≤200 LOC each
+2. Code follows existing DataPy patterns exactly
+3. No syntax errors, imports work correctly
+4. Manual testing shows:
+   - Consumer receives messages and calls user function
+   - Consumer commits offsets correctly
+   - Graceful shutdown works (Ctrl+C)
+   - Producer sends messages successfully
+   - Error handling works (try invalid credentials)
+5. Example scripts run without errors
+6. Code is production-ready (no TODOs, placeholders, or stubs)
+
+---
+
+## QUESTIONS TO RESOLVE BEFORE STARTING
+
+If you encounter any ambiguity:
+1. Check existing DataPy mods for patterns (e.g., csv_reader, data_filter)
+2. Refer to specification document sections
+3. Follow Python best practices and PEP 8
+4. When in doubt, prioritize simplicity and clarity
+
+---
+
+## START IMPLEMENTATION
+
+Begin with Component 1 (StreamController) as it's the foundation for the consumer's graceful shutdown. Then proceed in order: connector → consumer → producer.
+
+Good luck! Create production-quality, industry-standard code. 🚀

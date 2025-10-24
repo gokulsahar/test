@@ -1,0 +1,772 @@
+Document Purpose
+This document contains the complete, finalized requirements and architectural decisions for integrating Kafka streaming capabilities into the DataPy ETL framework. Use this to continue implementation in a new chat session.
+
+1. Project Overview
+1.1 Current State
+
+Framework: DataPy ETL - Python-based mod system (DuckDB)
+Paradigm: Batch processing with reusable mods (≤200 LOC per file)
+Deployment: OpenShift containers
+Pattern: User job scripts use run_mod() SDK to chain transformations
+
+1.2 Objective
+Migrate existing Talend Kafka streaming jobs to DataPy framework while maintaining:
+
+Industry-standard patterns (Unix signals, per-message commits)
+Production-quality code (clean, modular, testable)
+OpenShift compatibility (SIGTERM handling, containerized)
+Reusable mods (no business logic in framework layer)
+
+1.3 Talend Pattern to Replicate
+Current Talend Job Flow:
+┌────────────────────────────────────────────────────┐
+│ tKafkaConnection (PreJob - OnSubjobOk)            │
+│         ▼                                          │
+│ tKafkaInput (infinite loop - reads messages)      │
+│         ▼                                          │
+│ tMap_1 (transformation)                           │
+│         ▼                                          │
+│ tJavaRow_1 (custom logic)                         │
+│         ▼                                          │
+│ tExtractJSONFields_1 (parse JSON)                 │
+│         ▼                                          │
+│ tMap_2 (multi-output routing)                     │
+│         ├─> AccountAdd flow                       │
+│         └─> CustomerAdd flow                      │
+└────────────────────────────────────────────────────┘
+```
+
+**Key Talend Components:**
+- `tKafkaConnection` - Establishes connection with auth
+- `tKafkaInput` - Infinite message consumer (THIS IS THE CRITICAL COMPONENT)
+- `tKafkaOutput` - Sends messages to topics
+- `tMap` - Transformations, filtering, routing
+
+---
+
+## **2. Architecture Decisions - FINALIZED**
+
+### **2.1 Component Breakdown**
+```
+┌─────────────────────────────────────────────────────────┐
+│ MODS (Reusable, Generic - datapy/mods/streaming/)      │
+├─────────────────────────────────────────────────────────┤
+│ 1. kafka_connector    - Connection management          │
+│ 2. kafka_consumer     - Infinite poll loop             │
+│ 3. kafka_producer     - Send to topics                 │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ UTILS (Helpers - datapy/utils/)                        │
+├─────────────────────────────────────────────────────────┤
+│ 4. StreamController   - Signal handling utility        │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ USER JOB SCRIPTS (Business Logic)                      │
+├─────────────────────────────────────────────────────────┤
+│ - kafka_consumer_job.py                                │
+│ - kafka_context.json                                   │
+│ - User's message processing function                   │
+└─────────────────────────────────────────────────────────┘
+2.2 Technology Stack
+ComponentTechnologyRationaleKafka Clientconfluent-kafka-python >=2.3.0Industry standard, librdkafka-based, fastest Python clientAuthenticationSASL/SSL, Mutual TLSSupport username/password + certificatesGraceful ShutdownUnix signals (SIGTERM/SIGINT)OpenShift/K8s/Docker standardCommit StrategyPer-message (manual commit)Safest, matches Talend defaultLoggingExisting DataPy tab-delimitedPeriodic summaries (not per message)
+2.3 Key Design Principles
+✅ Separation of Concerns:
+
+Mods = Reusable infrastructure (no business logic)
+User scripts = Business logic (transformations, routing)
+
+✅ Optional Controller Pattern:
+
+StreamController is OPTIONAL parameter to kafka_consumer mod
+Auto-created internally if not provided (95% of use cases)
+User can provide explicit controller for:
+
+Checking shutdown mid-processing
+Coordinating multiple consumers (rare)
+
+
+
+✅ Producer Simplicity:
+
+kafka_producer mod is synchronous (request-based)
+Does NOT need StreamController (no infinite loop)
+Called from user's message processing function
+
+
+3. Component Specifications
+3.1 Component: kafka_connector Mod
+Purpose: Establish Kafka connection with authentication (SASL/SSL, certificates)
+Talend Equivalent: tKafkaConnection
+Key Parameters:
+python{
+    # Required
+    "bootstrap_servers": "broker1:9092,broker2:9092",
+    
+    # Security
+    "security_protocol": "SASL_SSL",  # PLAINTEXT | SASL_SSL | SASL_PLAINTEXT | SSL
+    "sasl_mechanism": "PLAIN",        # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+    "sasl_username": "kafka-user",
+    "sasl_password": "password",
+    
+    # SSL/TLS Certificates
+    "ssl_ca_location": "/path/to/ca-cert.pem",
+    "ssl_cert_location": "/path/to/client-cert.pem",  # For mutual TLS
+    "ssl_key_location": "/path/to/client-key.pem",    # For mutual TLS
+    "ssl_key_password": "key-password",                # Optional
+    
+    # Advanced
+    "additional_config": {}  # Power user overrides
+}
+Output:
+python{
+    "artifacts": {
+        "connection": KafkaConnectionConfig(
+            config_dict={...},  # Full librdkafka config
+            bootstrap_servers="...",
+            security_protocol="..."
+        )
+    }
+}
+Implementation Notes:
+
+Test connection with AdminClient.list_topics() to validate
+Support both SASL and mutual TLS (client certificates)
+Connection object is reused by consumer and producer mods
+
+
+3.2 Component: kafka_consumer Mod
+Purpose: Infinite message poll loop with graceful shutdown
+Talend Equivalent: tKafkaInput (THIS IS THE INFINITE LOOP COMPONENT)
+Key Parameters:
+python{
+    # Required
+    "connection": connection_object,       # From kafka_connector
+    "topics": ["topic1", "topic2"],        # List of topics
+    "group_id": "my-consumer-group",       # Consumer group for offsets
+    "message_processor": callback_function,# User's processing function
+    
+    # Consumer Behavior
+    "auto_offset_reset": "earliest",       # earliest | latest | none
+    
+    # Commit Strategy (v1.0: per_message only)
+    "commit_strategy": "per_message",      # Safest, Talend-like
+    
+    # Error Handling
+    "on_error": "continue",                # continue | retry | stop
+    "max_retries": 3,                      # For retry mode
+    "retry_backoff_ms": [100, 200, 400],   # Exponential backoff
+    
+    # Graceful Shutdown
+    "controller": None,                    # Optional StreamController (auto-created if None)
+    "shutdown_drain_timeout_s": 30,        # Wait for in-flight processing
+    
+    # Logging
+    "log_summary_interval": 1000           # Log stats every N messages
+}
+Message Format Passed to User Callback:
+pythonmessage = {
+    "key": str | None,           # Decoded UTF-8
+    "value": str | bytes,        # Decoded UTF-8 or raw bytes
+    "topic": str,
+    "partition": int,
+    "offset": int,
+    "timestamp": int,            # Unix timestamp (milliseconds)
+    "headers": dict,             # Headers as dict
+    "_raw_message": Message      # Original confluent_kafka.Message
+}
+User Callback Return Format:
+python# Success
+return {"status": "success"}
+
+# Error (triggers on_error behavior)
+return {"status": "error", "error": "reason"}
+
+# Or raise exception (treated as error)
+raise ValueError("Invalid data")
+Critical Implementation Details:
+
+Infinite Loop:
+
+pythonwhile not controller.should_stop():
+    msg = consumer.poll(timeout=1.0)
+    if msg is None:
+        continue
+    
+    # Call user's callback
+    result = message_processor(msg_dict)
+    
+    # Commit offset if success
+    if result["status"] == "success":
+        consumer.commit(message=msg)
+```
+
+2. **Graceful Shutdown Sequence:**
+```
+SIGTERM/SIGINT received
+  → Stop polling new messages
+  → Wait for in-flight message to complete (timeout: 30s)
+  → Commit final offset
+  → Close consumer
+  → Exit
+
+Error Handling Modes:
+
+
+continue: Log error, commit offset, move to next message
+retry: Retry with exponential backoff, then commit
+stop: Stop entire consumer (like Talend "Die on Error")
+
+
+3.3 Component: kafka_producer Mod
+Purpose: Send data to Kafka topics (synchronous, request-based)
+Talend Equivalent: tKafkaOutput
+Key Parameters:
+python{
+    # Required
+    "connection": connection_object,
+    "topic": "output-topic",
+    "data": DataFrame | dict | list,  # Data to send
+    
+    # Message Key (for partitioning)
+    "key_column": "customer_id",      # Column to use as key
+    "key_value": "fixed-key",         # Or fixed key value
+    
+    # Serialization
+    "value_format": "json",           # json | string | bytes
+    
+    # Headers
+    "headers": {"source": "datapy"},
+    
+    # Delivery
+    "flush_after_send": True,         # Wait for broker ack
+    "flush_timeout_s": 10.0,
+    
+    # Error Handling
+    "on_send_error": "raise"          # raise | log
+}
+Implementation Notes:
+
+Accepts multiple data formats (DataFrame, dict, list of dicts)
+Serializes to JSON by default
+Flushes after send to ensure delivery
+Does NOT need StreamController (no infinite loop)
+
+
+3.4 Component: StreamController Utility
+Purpose: Handle Unix signals for graceful shutdown coordination
+Location: datapy/utils/stream_controller.py
+Type: Utility class (NOT a mod)
+API:
+pythonclass StreamController:
+    def __init__(self):
+        """Register SIGTERM/SIGINT handlers."""
+        pass
+    
+    def should_stop(self) -> bool:
+        """Check if shutdown requested."""
+        pass
+    
+    def request_stop(self):
+        """Programmatically trigger shutdown (for testing)."""
+        pass
+    
+    def is_shutdown_initiated(self) -> bool:
+        """Check if shutdown started."""
+        pass
+Usage Pattern:
+Simple (95% of jobs - no explicit controller):
+python# Controller auto-created internally
+run_mod("kafka_consumer", {
+    "message_processor": my_func
+    # No controller param
+})
+Advanced (5% of jobs - explicit controller):
+pythonfrom datapy.utils.stream_controller import StreamController
+
+controller = StreamController()
+
+run_mod("kafka_consumer", {
+    "controller": controller,  # Explicit
+    "message_processor": my_func
+})
+
+def my_func(message):
+    # Check shutdown during long processing
+    if controller.should_stop():
+        return {"status": "error", "error": "shutdown"}
+    
+    long_operation()
+    return {"status": "success"}
+Signal Handling:
+
+Registers handlers for SIGTERM (Docker/K8s/OpenShift) and SIGINT (Ctrl+C)
+Thread-safe (uses threading.Event and threading.Lock)
+Works in all environments: local dev (Ctrl+C), OpenShift (SIGTERM), systemd, etc.
+
+
+4. Typical Job Patterns
+4.1 Pattern 1: Consumer → Transform → Database
+python# kafka_to_db_job.py
+
+from datapy.mod_manager.sdk import run_mod, setup_logging, setup_context
+
+def main():
+    setup_logging("INFO", "kafka_to_db_job.py")
+    setup_context("kafka_context.json")
+    
+    # Connect
+    conn = run_mod("kafka_connector", {
+        "bootstrap_servers": "${kafka.bootstrap_servers}",
+        "security_protocol": "SASL_SSL",
+        "sasl_username": "${kafka.username}",
+        "sasl_password": "${kafka.password}",
+        "ssl_ca_location": "${kafka.ca_cert}"
+    })
+    
+    # Consume (infinite loop - blocks here until Ctrl+C)
+    run_mod("kafka_consumer", {
+        "connection": conn["artifacts"]["connection"],
+        "topics": ["orders"],
+        "group_id": "orders-to-db",
+        "message_processor": process_to_db
+    })
+
+def process_to_db(message):
+    parsed = run_mod("json_parser", {"json_string": message["value"]})
+    transformed = run_mod("data_mapper", {...})
+    run_mod("database_insert", {"data": transformed["artifacts"]["data"]})
+    return {"status": "success"}
+
+if __name__ == "__main__":
+    main()
+4.2 Pattern 2: Consumer → Transform → Producer (Stream Transform)
+python# kafka_transform_job.py
+
+def main():
+    conn = run_mod("kafka_connector", {...})
+    
+    # Infinite consumer loop
+    run_mod("kafka_consumer", {
+        "connection": conn["artifacts"]["connection"],
+        "topics": ["${kafka.input_topic}"],
+        "group_id": "transformer-group",
+        "message_processor": lambda msg: transform_and_forward(msg, conn["artifacts"]["connection"])
+    })
+
+def transform_and_forward(message, connection):
+    # Parse
+    parsed = run_mod("json_parser", {"json_string": message["value"]})
+    
+    # Transform
+    transformed = run_mod("data_mapper", {
+        "data": parsed["artifacts"]["data"],
+        "column_mapping": {"customer_id": "cust_id"}
+    })
+    
+    # Send to output topic
+    run_mod("kafka_producer", {
+        "connection": connection,
+        "topic": "${kafka.output_topic}",
+        "data": transformed["artifacts"]["data"],
+        "key_column": "cust_id"
+    })
+    
+    return {"status": "success"}
+4.3 Pattern 3: Multi-Output Routing (Like Your Talend tMap_2)
+pythondef route_message(message, connection):
+    parsed = run_mod("json_parser", {"json_string": message["value"]})
+    
+    # Split based on conditions (like tMap_2)
+    split_result = run_mod("data_splitter", {
+        "data": parsed["artifacts"]["data"],
+        "split_conditions": {
+            "account_events": {"event_type": {"eq": "ACCOUNT_ADD"}},
+            "customer_events": {"event_type": {"eq": "CUSTOMER_ADD"}}
+        }
+    })
+    
+    # Route to appropriate outputs
+    if split_result["artifacts"]["account_events"] is not None:
+        run_mod("kafka_producer", {
+            "connection": connection,
+            "topic": "account-events-processed",
+            "data": split_result["artifacts"]["account_events"]
+        })
+    
+    if split_result["artifacts"]["customer_events"] is not None:
+        run_mod("kafka_producer", {
+            "connection": connection,
+            "topic": "customer-events-processed",
+            "data": split_result["artifacts"]["customer_events"]
+        })
+    
+    return {"status": "success"}
+
+5. Configuration Examples
+5.1 Context JSON (kafka_context.json)
+json{
+  "kafka": {
+    "bootstrap_servers": "broker1.example.com:9092,broker2.example.com:9092",
+    "security_protocol": "SASL_SSL",
+    "sasl_mechanism": "PLAIN",
+    "username": "kafka-user",
+    "password": "secure-password",
+    "ca_cert": "/opt/certs/kafka-ca.pem",
+    "client_cert": "/opt/certs/client-cert.pem",
+    "client_key": "/opt/certs/client-key.pem",
+    "input_topic": "orders-raw",
+    "output_topic": "orders-processed",
+    "consumer_group": "order-processor-group"
+  },
+  "processing": {
+    "log_level": "INFO",
+    "log_summary_interval": 1000,
+    "on_error": "continue",
+    "max_retries": 3
+  }
+}
+5.2 OpenShift Environment Variables
+yamlenv:
+- name: KAFKA_BOOTSTRAP_SERVERS
+  valueFrom:
+    configMapKeyRef:
+      name: kafka-config
+      key: bootstrap_servers
+- name: KAFKA_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: kafka-secret
+      key: username
+- name: KAFKA_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: kafka-secret
+      key: password
+
+6. OpenShift Deployment
+6.1 Deployment Manifest (Critical Settings)
+yamlapiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-consumer-orders
+spec:
+  replicas: 1  # Single consumer per group
+  template:
+    spec:
+      containers:
+      - name: consumer
+        image: your-registry/datapy-kafka:latest
+        command: ["python", "kafka_consumer_job.py"]
+        
+        # CRITICAL: Graceful shutdown
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sleep", "5"]
+        
+        # CRITICAL: Match shutdown timeout + buffer
+        terminationGracePeriodSeconds: 60
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+```
+
+### **6.2 Graceful Shutdown in OpenShift**
+```
+oc delete pod kafka-consumer-xyz
+  ↓
+OpenShift sends SIGTERM
+  ↓
+StreamController catches signal
+  ↓
+Consumer stops polling (should_stop() = True)
+  ↓
+Wait for in-flight message (max 30s)
+  ↓
+Commit offset
+  ↓
+Close consumer
+  ↓
+Pod exits (code 0)
+  ↓
+OpenShift removes pod
+
+Total: ~35-40 seconds (under 60s grace period)
+If timeout exceeded: OpenShift sends SIGKILL (force kill) - offsets may not commit
+
+7. Error Handling Strategy
+7.1 Error Modes (Configurable)
+python# Mode 1: Continue (safest for production)
+"on_error": "continue"  # Log error, commit offset, move to next
+
+# Mode 2: Retry with backoff
+"on_error": "retry"
+"max_retries": 3
+"retry_backoff_ms": [100, 200, 400]  # Exponential
+
+# Mode 3: Stop (like Talend "Die on Error")
+"on_error": "stop"  # Stop entire consumer on first error
+7.2 Retry Logic
+pythondef retry_message(message_dict, processor_func, max_retries, backoff_ms):
+    for attempt in range(max_retries):
+        delay_ms = backoff_ms[min(attempt, len(backoff_ms) - 1)]
+        time.sleep(delay_ms / 1000.0)
+        
+        try:
+            result = processor_func(message_dict)
+            if result["status"] == "success":
+                return True
+        except Exception as e:
+            logger.warning(f"Retry {attempt+1} failed: {e}")
+    
+    return False  # All retries failed
+
+8. Logging Strategy
+8.1 Log Levels
+python# DEBUG: Individual message details (disabled in prod)
+logger.debug(f"Processing offset {offset}")
+
+# INFO: Summary stats every N messages
+logger.info(f"Processed 5000 messages, Errors: 3, Rate: 500 msg/s")
+
+# WARNING: Recoverable errors, retries
+logger.warning(f"Retry attempt 2/3")
+
+# ERROR: Processing failures
+logger.error(f"Processing failed: {error}")
+
+# CRITICAL: Job-stopping errors
+logger.critical(f"Consumer rebalance failed")
+8.2 Periodic Summary (Not Per Message)
+python# Configuration
+"log_summary_interval": 1000  # Log every 1000 messages
+
+# Example output
+# 2025-10-24 10:15:30  INFO  kafka_consumer  Processed 5000 messages, Errors: 3
+# 2025-10-24 10:16:30  INFO  kafka_consumer  Processed 10000 messages, Errors: 5
+```
+
+### **8.3 Log Rotation**
+
+- DataPy logs to stderr
+- Captured by OpenShift/Docker automatically
+- View with: `oc logs -f deployment/kafka-consumer`
+- External rotation via logrotate or log aggregation (ELK, Splunk)
+
+---
+
+## **9. File Structure**
+```
+datapy/
+├── mods/
+│   └── streaming/                    # NEW
+│       ├── __init__.py
+│       ├── kafka_connector.py        # Connection management (≤200 LOC)
+│       ├── kafka_consumer.py         # Infinite poll loop (≤200 LOC)
+│       └── kafka_producer.py         # Send to topics (≤150 LOC)
+│
+├── utils/
+│   ├── stream_controller.py          # NEW - Signal handling (≤100 LOC)
+│   ├── script_monitor.py             # Existing
+│   └── ...
+│
+├── mod_manager/
+│   ├── sdk.py                        # Existing - run_mod, setup_logging
+│   └── ...
+│
+└── tests/
+    ├── mods/streaming/
+    │   ├── test_kafka_connector.py
+    │   ├── test_kafka_consumer.py
+    │   └── test_kafka_producer.py
+    └── utils/
+        └── test_stream_controller.py
+
+# User's job structure
+kafka_jobs/
+├── kafka_consumer_job.py             # User's job script
+├── kafka_context.json                # Configuration
+└── README.md
+```
+
+---
+
+## **10. Dependencies**
+```
+# requirements.txt additions
+
+confluent-kafka>=2.3.0  # Kafka client (librdkafka-based)
+
+
+
+11. Testing Strategy
+11.1 Unit Tests
+python# Test kafka_connector
+- test_connector_success_plaintext()
+- test_connector_sasl_ssl_with_certs()
+- test_connector_missing_credentials()
+- test_connector_invalid_security_protocol()
+
+# Test kafka_consumer
+- test_consumer_processes_messages()
+- test_consumer_retry_on_error()
+- test_consumer_graceful_shutdown()
+- test_consumer_commit_per_message()
+
+# Test StreamController
+- test_controller_sigterm_handling()
+- test_controller_programmatic_stop()
+- test_controller_loop_exit()
+11.2 Integration Tests
+python# Use testcontainers for Kafka
+@pytest.fixture
+def kafka_container():
+    with KafkaContainer() as kafka:
+        yield kafka
+
+def test_end_to_end_consumer_producer(kafka_container):
+    # Produce → Consume → Transform → Produce → Verify
+    pass
+11.3 Manual Testing
+bash# Local Kafka (Docker Compose)
+docker-compose up -d kafka
+
+# Produce test messages
+kafka-console-producer --topic test-orders --bootstrap-server localhost:9092
+
+# Run DataPy job
+python kafka_consumer_job.py
+
+# Test graceful shutdown (Ctrl+C)
+# Verify offsets committed
+kafka-consumer-groups --describe --group my-group --bootstrap-server localhost:9092
+```
+
+---
+
+## **12. Implementation Checklist**
+
+### **Phase 1: Core Infrastructure**
+- [ ] `StreamController` utility (datapy/utils/stream_controller.py)
+- [ ] `kafka_connector` mod (datapy/mods/streaming/kafka_connector.py)
+- [ ] Unit tests for both
+
+### **Phase 2: Consumer**
+- [ ] `kafka_consumer` mod (datapy/mods/streaming/kafka_consumer.py)
+- [ ] Infinite poll loop implementation
+- [ ] Graceful shutdown integration
+- [ ] Retry logic with exponential backoff
+- [ ] Unit tests
+
+### **Phase 3: Producer**
+- [ ] `kafka_producer` mod (datapy/mods/streaming/kafka_producer.py)
+- [ ] Message serialization (JSON/string/bytes)
+- [ ] Key extraction logic
+- [ ] Unit tests
+
+### **Phase 4: Integration & Testing**
+- [ ] Example job scripts (kafka_consumer_job.py)
+- [ ] Context JSON templates
+- [ ] Integration tests with testcontainers
+- [ ] Manual testing with local Kafka
+
+### **Phase 5: Deployment**
+- [ ] Dockerfile
+- [ ] OpenShift deployment manifests
+- [ ] ConfigMaps and Secrets
+- [ ] Documentation
+
+---
+
+## **13. Key Decisions Summary**
+
+| Decision Point | Choice | Rationale |
+|---------------|--------|-----------|
+| **Kafka Client** | confluent-kafka-python | Industry standard, fastest, librdkafka-based |
+| **Auth Support** | SASL/SSL + Mutual TLS | Match Talend, support certs + passwords |
+| **Shutdown** | Unix signals (SIGTERM/SIGINT) | OpenShift/K8s/Docker standard |
+| **Controller** | Optional (auto-created) | Simple for 95% of jobs, available for advanced |
+| **Commit** | Per-message (manual) | Safest, Talend-like (v1.0) |
+| **Error Handling** | continue/retry/stop | Flexible, match Talend patterns |
+| **Logging** | Periodic summaries | Avoid infinite logs |
+| **Producer** | Synchronous, no controller | Request-based, no infinite loop |
+
+---
+
+## **14. Common Use Cases**
+
+### **Use Case 1: Orders Processing (95% of jobs)**
+```
+Kafka Topic → Consumer → Parse JSON → Transform → Database
+Pattern: Simple consumer with auto-created controller
+```
+
+### **Use Case 2: Stream Transform (20% of jobs)**
+```
+Input Topic → Consumer → Transform → Producer → Output Topic
+Pattern: Consumer + Producer in same job, shared connection
+```
+
+### **Use Case 3: Multi-Output Routing (Your tMap_2 pattern)**
+```
+Input Topic → Consumer → Parse → Route → Multiple Outputs
+Pattern: data_splitter mod for routing, multiple producers
+```
+
+### **Use Case 4: Long Processing with Shutdown Checks (5% of jobs)**
+```
+Input Topic → Consumer → Long DB Query → ML Inference → Output
+Pattern: Explicit controller, check should_stop() during processing
+
+15. Open Questions / Future Enhancements
+v1.0 Scope (Current):
+
+✅ Per-message commit only
+✅ Basic error handling (continue/retry/stop)
+✅ JSON serialization
+✅ Manual offset management
+
+Future (v2.0+):
+
+ Batch commit strategy (commit every N messages)
+ Periodic commit strategy (commit every N seconds)
+ Dead Letter Queue (DLQ) support
+ Avro/Protobuf serialization with Schema Registry
+ Exactly-once semantics (transactional producer/consumer)
+ Metrics export (Prometheus/StatsD)
+ Consumer lag monitoring integration
+
+
+16. Critical Reminders
+🚨 IMPORTANT POINTS:
+
+tKafkaInput = kafka_consumer mod - This is THE infinite loop component
+StreamController is a UTILITY, not a MOD - Located in datapy/utils/
+Producer does NOT need controller - It's synchronous, request-based
+Controller is OPTIONAL - Auto-created by kafka_consumer if not provided
+Per-message commit ONLY in v1.0 - Safest, Talend-like
+Unix signals work everywhere - Development (Ctrl+C) and OpenShift (SIGTERM)
+Mods have NO business logic - User's processing function contains transformations
+≤200 LOC per file - Clean, modular, production-quality code
+SSL/TLS support required - Both SASL and mutual TLS (client certificates)
+OpenShift compatibility mandatory - SIGTERM handling, graceful shutdown
+
+
+17. Next Steps for Implementation
+
+Start with StreamController - Smallest component, foundation for shutdown
+Then kafka_connector - Connection layer (SASL/SSL, certs)
+Then kafka_consumer - Core infinite loop (most complex)
+Then kafka_producer - Simple send operation
+Finally integration tests - End-to-end with testcontainers
+
+
+END OF CONTEXT DOCUMENT
+This document contains everything discussed and finalized. Use it to continue implementation in a fresh chat session. All architectural decisions are locked in.
