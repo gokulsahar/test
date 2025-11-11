@@ -1,0 +1,1512 @@
+================================================================================
+DUCKDB PYTHON API DOCUMENTATION
+================================================================================
+Comprehensive guide covering Relational API, Functions, Types, and Expressions
+Focus: Lazy Loading, SQL Injection Prevention, and Optimization
+================================================================================
+
+TABLE OF CONTENTS
+=================
+1. LAZY EVALUATION & OPTIMIZATION
+2. SQL INJECTION PREVENTION
+3. RELATIONAL API
+   3.1. Relation Creation
+   3.2. Relation Inspection
+   3.3. Transformation Methods
+   3.4. Aggregation Functions
+4. PYTHON FUNCTION API
+5. TYPES API
+6. EXPRESSION API
+7. BEST PRACTICES & OPTIMIZATION TIPS
+
+================================================================================
+1. LAZY EVALUATION & OPTIMIZATION
+================================================================================
+
+LAZY EVALUATION CONCEPT
+-----------------------
+DuckDB relations use lazy evaluation - nothing is executed until an output 
+method is called. Relations are symbolic representations of SQL queries.
+
+Example:
+--------
+import duckdb
+conn = duckdb.connect()
+
+# This does NOT execute yet - no data loaded
+rel = conn.sql("from range(1_000_000_000)")
+
+# Still no execution
+filtered = rel.filter("range > 100000")
+
+# Only now does execution happen
+filtered.show()  # Fetches first 10K rows
+filtered.to_table("result")  # Executes and stores all results
+
+BENEFITS OF LAZY EVALUATION
+---------------------------
+1. Query optimization: DuckDB can optimize entire query chain before execution
+2. Memory efficiency: Only process data when needed
+3. Performance: Avoid unnecessary computations
+4. Composability: Build complex queries incrementally
+
+OUTPUT METHODS (Trigger Execution)
+---------------------------------
+- show()          # Display first rows
+- fetchall()      # Fetch all results as tuples
+- fetchone()      # Fetch single row
+- to_df()         # Convert to pandas DataFrame
+- to_arrow()      # Convert to Arrow table
+- to_table(name)  # Create persistent table
+- write_csv()     # Write to CSV
+- write_parquet() # Write to Parquet
+
+================================================================================
+2. SQL INJECTION PREVENTION
+================================================================================
+
+CRITICAL: ALWAYS USE PARAMETERIZED QUERIES OR SAFE METHODS
+----------------------------------------------------------
+
+METHOD 1: PARAMETERIZED QUERIES (Recommended)
+----------------------------------------------
+Use parameter placeholders ($1, $2, etc.) or named parameters:
+
+# Using positional parameters
+conn.execute("SELECT * FROM users WHERE id = $1", [user_id])
+
+# Using params argument with sql()
+rel = conn.sql("SELECT * FROM data WHERE category = $1", params=[category])
+
+# With multiple parameters
+conn.execute(
+    "SELECT * FROM orders WHERE user_id = $1 AND date > $2",
+    [user_id, start_date]
+)
+
+METHOD 2: EXPRESSION API (Safe for Dynamic Queries)
+---------------------------------------------------
+The Expression API is SAFE because it doesn't involve string concatenation:
+
+from duckdb import ColumnExpression, ConstantExpression
+
+# Safe - using Expression objects
+user_col = ColumnExpression('username')
+value = ConstantExpression(user_input)
+rel = conn.table('users').filter(user_col == value)
+
+# Safe comparison operations
+rel = conn.table('products').filter(
+    ColumnExpression('price') > ConstantExpression(min_price)
+)
+
+METHOD 3: RELATIONAL API METHODS (Safe)
+---------------------------------------
+Using relational methods instead of raw SQL:
+
+# SAFE - No string concatenation
+rel = conn.table('users')
+rel = rel.filter(f"age > {age}")  # DANGEROUS if age is user input!
+
+# SAFE - Use parameterized approach
+rel = conn.table('users').filter(ColumnExpression('age') > ConstantExpression(age))
+
+# SAFE - Reading files
+rel = conn.read_parquet('data.parquet')
+rel = conn.read_csv('data.csv')
+
+UNSAFE PRACTICES (NEVER DO THIS)
+---------------------------------
+# DANGEROUS - SQL Injection vulnerable
+user_input = "1; DROP TABLE users--"
+conn.sql(f"SELECT * FROM data WHERE id = {user_input}")  # BAD!
+
+# DANGEROUS - String concatenation
+query = "SELECT * FROM users WHERE name = '" + user_name + "'"  # BAD!
+conn.sql(query)
+
+# DANGEROUS - .format()
+conn.sql("SELECT * FROM data WHERE category = '{}'".format(category))  # BAD!
+
+SAFE DYNAMIC COLUMN/TABLE NAMES
+-------------------------------
+If you need dynamic identifiers (column/table names), validate them:
+
+def safe_column_name(col_name):
+    """Validate column name against whitelist or pattern"""
+    import re
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', col_name):
+        raise ValueError("Invalid column name")
+    return col_name
+
+# Then use:
+col = safe_column_name(user_provided_column)
+rel = conn.table('data').select(col)
+
+================================================================================
+3. RELATIONAL API
+================================================================================
+
+3.1. RELATION CREATION
+----------------------
+
+from_df(df: pandas.DataFrame)
+-----------------------------
+Create relation from pandas DataFrame:
+
+import pandas as pd
+df = pd.DataFrame({'id': [1, 2, 3], 'text': ['a', 'b', 'c']})
+rel = conn.from_df(df)
+
+from_arrow(arrow_object)
+-----------------------
+Create relation from Arrow Table or RecordBatch:
+
+import pyarrow as pa
+table = pa.table([pa.array([1, 2, 3])], names=['id'])
+rel = conn.from_arrow(table)
+
+from_csv_auto(path, **kwargs) / read_csv()
+------------------------------------------
+Read CSV with automatic schema detection:
+
+rel = conn.read_csv('data.csv', 
+                    header=True,
+                    sep=',',
+                    encoding='utf-8',
+                    parallel=True,
+                    compression='gzip')
+
+Key parameters:
+- sep/delimiter: Field separator
+- header: Row number for column names
+- dtype: Dict of column types
+- skiprows: Rows to skip
+- sample_size: Rows for schema inference
+- parallel: Enable parallel reading
+- normalize_names: Lowercase column names
+- null_padding: Handle missing columns
+- ignore_errors: Skip parsing errors
+
+from_parquet(file_glob, **kwargs) / read_parquet()
+-------------------------------------------------
+Read Parquet files (supports glob patterns):
+
+rel = conn.read_parquet('data/*.parquet',
+                        binary_as_string=False,
+                        hive_partitioning=True,
+                        union_by_name=True,
+                        filename=True)
+
+Parameters:
+- file_glob: Path or glob pattern
+- binary_as_string: Treat binary as string
+- hive_partitioning: Auto-detect Hive partitions
+- union_by_name: Union by column names
+- filename: Add filename column
+- file_row_number: Add row number within file
+
+read_json(path, **kwargs)
+------------------------
+Read JSON files:
+
+rel = conn.read_json('data.json',
+                     format='auto',
+                     records='auto',
+                     compression='gzip',
+                     ignore_errors=False)
+
+sql(query, alias='', params=None)
+---------------------------------
+Execute SQL and create relation:
+
+# Simple query
+rel = conn.sql("SELECT * FROM range(10)")
+
+# With parameters (SAFE from SQL injection)
+rel = conn.sql("SELECT * FROM users WHERE id = $1", params=[user_id])
+
+# With alias
+rel = conn.sql("SELECT * FROM data", alias='my_data')
+
+table(table_name: str)
+---------------------
+Create relation from existing table:
+
+rel = conn.table('users')
+
+view(view_name: str)
+-------------------
+Create relation from existing view:
+
+rel = conn.view('user_summary')
+
+values(*args)
+------------
+Create relation from values:
+
+rel = conn.values([1, 'a', True])
+rel = conn.values([[1, 'a'], [2, 'b'], [3, 'c']])
+
+table_function(name, parameters=None)
+------------------------------------
+Call table function:
+
+rel = conn.table_function('range', [1, 100])
+
+3.2. RELATION INSPECTION
+------------------------
+
+columns
+-------
+List of column names:
+column_list = rel.columns  # Returns: ['col1', 'col2', ...]
+
+dtypes / types
+-------------
+List of column data types:
+types = rel.dtypes  # Returns: [BIGINT, VARCHAR, ...]
+
+shape
+-----
+Tuple of (rows, columns):
+num_rows, num_cols = rel.shape
+
+describe()
+----------
+Get statistics for each column:
+stats = rel.describe()  # Returns relation with count, mean, stddev, min, max, median
+
+explain(type='standard')
+-----------------------
+Get query execution plan:
+plan = rel.explain()
+
+sql_query()
+----------
+Get SQL representation:
+sql_str = rel.sql_query()
+
+alias
+-----
+Get current alias:
+name = rel.alias
+
+set_alias(alias: str)
+--------------------
+Set new alias:
+rel = rel.set_alias('my_relation')
+
+description
+----------
+Get column metadata:
+meta = rel.description  # Returns: [(name, type, None, None, None, None, None), ...]
+
+3.3. TRANSFORMATION METHODS (LAZY)
+---------------------------------
+All these methods return a new relation without executing the query.
+
+filter(condition)
+----------------
+Filter rows by condition:
+
+# Using string
+rel = rel.filter("age > 18")
+
+# Using Expression (SAFER)
+from duckdb import ColumnExpression, ConstantExpression
+rel = rel.filter(ColumnExpression('age') > ConstantExpression(18))
+
+# Multiple conditions
+rel = rel.filter("age > 18 AND status = 'active'")
+
+select(*expressions) / project(*expressions)
+--------------------------------------------
+Select specific columns:
+
+rel = rel.select('col1', 'col2')
+rel = rel.select('col1', 'col2 * 2 as doubled')
+rel = rel.project('id', 'name')  # Alias for select
+
+# With grouping
+rel = rel.select('category', 'SUM(amount)', groups='category')
+
+limit(n, offset=0)
+-----------------
+Limit number of rows:
+
+rel = rel.limit(10)  # First 10 rows
+rel = rel.limit(10, offset=20)  # Rows 21-30
+
+order(order_expr) / sort(*args)
+------------------------------
+Sort results:
+
+rel = rel.order('age DESC')
+rel = rel.order('last_name ASC, first_name ASC')
+rel = rel.sort('age', 'name')
+
+aggregate(aggr_expr, group_expr='')
+----------------------------------
+Perform aggregation:
+
+# Simple aggregation
+rel = rel.aggregate('COUNT(*)')
+rel = rel.aggregate('SUM(amount), AVG(price)')
+
+# With grouping
+rel = rel.aggregate('SUM(sales)', group_expr='region')
+rel = rel.aggregate(['SUM(sales)', 'COUNT(*)'], 'region, product')
+
+join(other_rel, condition, how='inner')
+--------------------------------------
+Join with another relation:
+
+rel1 = conn.table('orders')
+rel2 = conn.table('customers')
+
+# Using column name (generates USING clause)
+result = rel1.join(rel2, condition='customer_id', how='inner')
+
+# Using full condition (generates ON clause)
+result = rel1.join(rel2, 
+                   condition=f"{rel1.alias}.customer_id = {rel2.alias}.id",
+                   how='left')
+
+Join types: 'inner', 'left', 'right', 'outer', 'semi', 'anti'
+
+union(other_rel)
+---------------
+Union with another relation (UNION ALL):
+
+rel1 = conn.sql("SELECT * FROM table1")
+rel2 = conn.sql("SELECT * FROM table2")
+combined = rel1.union(rel2)
+
+# For DISTINCT, add:
+combined = combined.distinct()
+
+intersect(other_rel)
+-------------------
+Set intersection:
+
+common = rel1.intersect(rel2)
+
+except_(other_rel)
+-----------------
+Set difference:
+
+difference = rel1.except_(rel2)
+
+distinct()
+---------
+Get distinct rows:
+
+unique_rel = rel.distinct()
+
+cross(other_rel)
+---------------
+Cartesian product:
+
+product = rel1.cross(rel2)
+
+map(function, schema=None)
+-------------------------
+Apply Python function to relation:
+
+def transform(df):
+    df['new_col'] = df['col1'] * 2
+    return df
+
+rel = rel.map(transform, schema={'col1': int, 'new_col': int})
+
+insert(values)
+-------------
+Insert values into table:
+
+rel = conn.table('users')
+rel.insert((1, 'Alice', 30))
+
+insert_into(table_name)
+----------------------
+Insert relation data into table:
+
+rel = conn.values([[1, 'Alice'], [2, 'Bob']])
+rel.insert_into('users')
+
+update(set, condition=None)
+--------------------------
+Update table rows:
+
+from duckdb import ColumnExpression
+rel = conn.table('users')
+rel.update(set={'age': 31}, condition=ColumnExpression('id') == 1)
+
+3.4. AGGREGATION FUNCTIONS
+--------------------------
+All aggregation functions support these parameters:
+- groups: Comma-separated group by columns
+- window_spec: Window specification (over partition by ... order by ...)
+- projected_columns: Columns to include in result
+
+count(column, groups='', window_spec='', projected_columns='')
+-------------------------------------------------------------
+rel.count('*')
+rel.count('user_id', groups='region')
+
+sum(column, ...)
+---------------
+rel.sum('amount')
+rel.sum('sales', groups='region, quarter')
+
+avg(column, ...) / mean(column, ...)
+-----------------------------------
+rel.avg('price')
+rel.mean('temperature', groups='city')
+
+min(column, ...) / max(column, ...)
+----------------------------------
+rel.min('date')
+rel.max('score', groups='student_id')
+
+median(column, ...)
+------------------
+rel.median('salary')
+
+stddev(column, ...) / std(column, ...)
+-------------------------------------
+rel.stddev('measurements')
+rel.std('values', groups='category')
+
+var(column, ...) / variance(column, ...)
+---------------------------------------
+rel.var('data')
+
+first(column, groups='', projected_columns='')
+---------------------------------------------
+rel.first('timestamp', groups='user_id')
+
+last(column, groups='', projected_columns='')
+--------------------------------------------
+rel.last('value', groups='sensor_id')
+
+string_agg(column, separator, groups='', ...)
+--------------------------------------------
+Concatenate strings with separator:
+rel.string_agg('name', ', ', groups='department')
+
+list(column, groups='', ...)
+---------------------------
+Aggregate values into list:
+rel.list('item', groups='order_id')
+
+histogram(column, groups='', ...)
+--------------------------------
+Create histogram of values:
+rel.histogram('category', groups='region')
+
+last(column, groups='', projected_columns='')
+--------------------------------------------
+Returns the last value of a column:
+rel.last('value', groups='user_id')
+
+last_value(column, window_spec='', projected_columns='')
+--------------------------------------------------------
+Computes the last value within the group or partition:
+rel.last_value('status', window_spec='over (partition by user order by time)')
+
+lead(column, window_spec, offset=1, default_value='NULL', ignore_nulls=False, ...)
+---------------------------------------------------------------------------------
+Computes the lead within the partition:
+rel.lead('value', window_spec='over (order by time)', offset=1)
+
+list(column, groups='', ...)
+---------------------------
+Aggregate values into list:
+rel.list('item', groups='order_id')
+
+max(column, groups='', window_spec='', projected_columns='')
+-----------------------------------------------------------
+Returns the maximum value:
+rel.max('price', groups='category')
+
+mean(column, ...) / avg(column, ...)
+-----------------------------------
+Computes the average (aliases):
+rel.mean('temperature', groups='city')
+rel.avg('price')
+
+median(column, groups='', ...)
+------------------------------
+Computes the median:
+rel.median('salary')
+
+min(column, groups='', window_spec='', projected_columns='')
+-----------------------------------------------------------
+Returns the minimum value:
+rel.min('date')
+
+mode(column, groups='', ...)
+---------------------------
+Computes the mode (most frequent value):
+rel.mode('category', groups='region')
+
+n_tile(window_spec, num_buckets, projected_columns='')
+-----------------------------------------------------
+Divides the partition into num_buckets:
+rel.n_tile(window_spec='over (partition by dept)', num_buckets=4, 
+           projected_columns='name, salary, dept')
+
+nth_value(column, window_spec, offset, ignore_nulls=False, ...)
+--------------------------------------------------------------
+Computes the nth value within the partition (1-based index):
+rel.nth_value('score', window_spec='over (order by date)', offset=3)
+
+percent_rank(window_spec, projected_columns='')
+----------------------------------------------
+Computes the relative rank within the partition:
+rel.percent_rank(window_spec='over (partition by dept order by salary)',
+                 projected_columns='name, salary, dept')
+
+product(column, groups='', ...)
+------------------------------
+Returns the product of all values:
+rel.product('multiplier', groups='category')
+
+quantile(column, q=0.5, groups='', ...)
+--------------------------------------
+Computes the exact quantile value (discrete):
+rel.quantile('age', q=0.5, groups='gender')
+rel.quantile('income', q=0.95)  # 95th percentile
+
+quantile_cont(column, q=0.5, groups='', ...)
+-------------------------------------------
+Computes the interpolated quantile value (continuous):
+rel.quantile_cont('salary', q=0.75, groups='department')
+
+quantile_disc(column, q=0.5, groups='', ...)
+-------------------------------------------
+Computes the exact quantile value (discrete):
+rel.quantile_disc('age', q=0.5, groups='gender')
+
+select_dtypes(types) / select_types(types)
+-----------------------------------------
+Select columns by filtering on type(s):
+from duckdb.typing import VARCHAR, BIGINT
+rel.select_dtypes([VARCHAR])  # Only VARCHAR columns
+rel.select_types([BIGINT, VARCHAR])  # BIGINT or VARCHAR columns
+
+stddev(column, ...) / std(column, ...) / stddev_samp(column, ...)
+----------------------------------------------------------------
+Computes the sample standard deviation:
+rel.stddev('measurements')
+rel.std('values', groups='category')
+
+stddev_pop(column, groups='', ...)
+---------------------------------
+Computes the population standard deviation:
+rel.stddev_pop('data', groups='experiment')
+
+sum(column, groups='', window_spec='', projected_columns='')
+-----------------------------------------------------------
+Computes the sum of all values:
+rel.sum('amount')
+rel.sum('sales', groups='region, quarter')
+
+unique(unique_aggr)
+------------------
+Returns the distinct values in a column:
+rel.unique('status')
+
+value_counts(column, groups='')
+------------------------------
+Computes count of elements and projects the original column:
+rel.value_counts('category', groups='category')
+
+var(column, ...) / variance(column, ...) / var_samp(column, ...)
+---------------------------------------------------------------
+Computes the sample variance:
+rel.var('data')
+rel.variance('measurements', groups='sensor')
+
+var_pop(column, groups='', ...)
+------------------------------
+Computes the population variance:
+rel.var_pop('values', groups='group')
+
+WINDOW FUNCTIONS
+----------------
+Window functions require window_spec parameter:
+
+rank(window_spec, projected_columns='')
+--------------------------------------
+rel.rank(window_spec='over (partition by dept order by salary desc)',
+         projected_columns='name, salary, dept')
+
+dense_rank(window_spec, ...) / rank_dense(window_spec, ...)
+----------------------------------------------------------
+rel.dense_rank(window_spec='over (order by score desc)')
+
+row_number(window_spec, ...)
+---------------------------
+rel.row_number(window_spec='over (partition by category order by id)')
+
+lag(column, window_spec, offset=1, default_value='NULL', ignore_nulls=False, ...)
+--------------------------------------------------------------------------------
+rel.lag('price', window_spec='over (partition by product order by date)',
+        offset=1, default_value='0')
+
+lead(column, window_spec, offset=1, default_value='NULL', ignore_nulls=False, ...)
+---------------------------------------------------------------------------------
+rel.lead('value', window_spec='over (order by time)', offset=1)
+
+first_value(column, window_spec, ...)
+------------------------------------
+rel.first_value('price', window_spec='over (partition by product order by date)')
+
+last_value(column, window_spec, ...)
+-----------------------------------
+rel.last_value('status', window_spec='over (partition by user order by time)')
+
+nth_value(column, n, window_spec, ...)
+-------------------------------------
+rel.nth_value('score', 3, window_spec='over (order by date)')
+
+================================================================================
+4. PYTHON FUNCTION API
+================================================================================
+
+CREATING PYTHON UDFs
+--------------------
+
+create_function(name, function, parameters, return_type, **options)
+------------------------------------------------------------------
+
+Basic example:
+-------------
+import duckdb
+from duckdb.typing import VARCHAR
+
+def generate_random_name():
+    from faker import Faker
+    fake = Faker()
+    return fake.name()
+
+conn = duckdb.connect()
+conn.create_function("random_name", generate_random_name, [], VARCHAR)
+result = conn.sql("SELECT random_name()").fetchall()
+
+Parameters:
+----------
+- name: Unique function name
+- function: Python callable
+- parameters: List of input types
+- return_type: Output type
+- type: 'native' (default) or 'arrow'
+- null_handling: 'default' or 'special'
+- exception_handling: 'default' or 'return_null'
+- side_effects: True if function has side effects (default: False)
+
+TYPE ANNOTATION
+---------------
+If function has type hints, parameters can be inferred:
+
+def my_function(x: int, y: str) -> str:
+    return f"{y}: {x}"
+
+conn.create_function("my_func", my_function)  # Types auto-detected
+
+NULL HANDLING
+------------
+Default: NULL input → NULL output automatically
+
+For custom NULL handling:
+------------------------
+def handle_nulls(x):
+    return 5 if x is None else x * 2
+
+conn.create_function("my_func", handle_nulls, [BIGINT], BIGINT,
+                     null_handling='special')
+
+EXCEPTION HANDLING
+-----------------
+Default: Exceptions are re-thrown
+
+To return NULL on exception:
+---------------------------
+def may_fail(x):
+    if x < 0:
+        raise ValueError("Negative value")
+    return x * 2
+
+conn.create_function("safe_func", may_fail, [BIGINT], BIGINT,
+                     exception_handling='return_null')
+
+SIDE EFFECTS
+-----------
+Mark function if it has side effects (non-deterministic):
+
+def counter():
+    counter.count += 1
+    return counter.count
+counter.count = 0
+
+conn.create_function("count", counter, side_effects=True)
+
+ARROW UDFs (VECTORIZED - MUCH FASTER)
+-------------------------------------
+Process data in batches using Arrow:
+
+import pyarrow as pa
+from pyarrow import compute as pc
+from duckdb.typing import VARCHAR
+
+def mirror(strings: pa.Array, sep: pa.Array) -> pa.Array:
+    return pc.binary_join_element_wise(strings, 
+                                       pc.ascii_reverse(strings), 
+                                       sep)
+
+conn.create_function("mirror", mirror, [VARCHAR, VARCHAR], VARCHAR, 
+                     type='arrow')
+
+# Usage:
+conn.sql("SELECT mirror(name, '|') FROM users")
+
+NATIVE UDFs
+----------
+Process one row at a time (slower but simpler):
+
+from duckdb.typing import DATE
+from faker import Faker
+
+def random_date():
+    fake = Faker()
+    return fake.date_between()
+
+conn.create_function("random_date", random_date, [], DATE, type='native')
+
+PARTIAL FUNCTIONS
+----------------
+Use functools.partial for parameterized UDFs:
+
+import functools
+from datetime import datetime
+
+def logger(time_func, prefix, value):
+    return f"{time_func()} {prefix} {value}"
+
+def get_time():
+    return datetime.now().isoformat()
+
+conn.create_function('log',
+                     functools.partial(logger, get_time, 'INFO:'))
+
+REMOVING FUNCTIONS
+-----------------
+conn.remove_function('function_name')
+
+================================================================================
+5. TYPES API
+================================================================================
+
+DuckDBPyType class represents DuckDB data types.
+
+IMPLICIT TYPE CONVERSION
+------------------------
+
+Python Built-ins → DuckDB Types:
+--------------------------------
+bool       → BOOLEAN
+bytearray  → BLOB
+bytes      → BLOB
+float      → DOUBLE
+int        → BIGINT
+str        → VARCHAR
+
+Numpy DTypes → DuckDB Types:
+----------------------------
+np.bool_       → BOOLEAN
+np.float32     → FLOAT
+np.float64     → DOUBLE
+np.int8        → TINYINT
+np.int16       → SMALLINT
+np.int32       → INTEGER
+np.int64       → BIGINT
+np.uint8       → UTINYINT
+np.uint16      → USMALLINT
+np.uint32      → UINTEGER
+np.uint64      → UBIGINT
+
+BUILT-IN TYPE CONSTANTS
+-----------------------
+From duckdb.typing import *
+
+Available constants:
+BIGINT, BOOLEAN, BLOB, BIT, DATE, DOUBLE, FLOAT, HUGEINT, INTEGER,
+INTERVAL, SMALLINT, SQLNULL, TIME, TIME_TZ, TIMESTAMP, TIMESTAMP_MS,
+TIMESTAMP_NS, TIMESTAMP_S, TIMESTAMP_TZ, TINYINT, UBIGINT, UHUGEINT,
+UINTEGER, USMALLINT, UTINYINT, UUID, VARCHAR
+
+Usage:
+-----
+from duckdb.typing import BIGINT, VARCHAR
+
+conn.create_function('my_func', func, [BIGINT, VARCHAR], VARCHAR)
+
+NESTED TYPES
+------------
+
+Lists:
+-----
+from typing import List
+list_type = list[int]  # → LIST<BIGINT>
+nested_list = list[list[str]]  # → LIST<LIST<VARCHAR>>
+
+Maps:
+----
+from typing import Dict
+map_type = dict[str, int]  # → MAP(VARCHAR, BIGINT)
+
+Using DuckDBPyType:
+import duckdb.typing as dt
+dt.DuckDBPyType(dict[str, int])  # → MAP(VARCHAR, BIGINT)
+
+Structs:
+-------
+struct_type = {'field1': str, 'field2': int}  # → STRUCT(field1 VARCHAR, field2 BIGINT)
+
+# Using dict syntax
+from duckdb.typing import DuckDBPyType
+DuckDBPyType({'a': str, 'b': int})  # → STRUCT(a VARCHAR, b BIGINT)
+
+Unions:
+------
+from typing import Union
+union_type = Union[int, str, bool]  # → UNION(u1 BIGINT, u2 VARCHAR, u3 BOOLEAN)
+
+Complex nested example:
+----------------------
+from typing import Union
+complex_type = list[dict[Union[str, int], str]]
+# → MAP(UNION(u1 VARCHAR, u2 BIGINT), VARCHAR)[]
+
+CREATION FUNCTIONS
+-----------------
+
+list_type(child_type) / array_type(child_type)
+----------------------------------------------
+list_type = conn.list_type(VARCHAR)  # LIST<VARCHAR>
+
+struct_type(fields) / row_type(fields)
+-------------------------------------
+# Using list of types
+struct = conn.struct_type([BIGINT, VARCHAR])
+
+# Using dict
+struct = conn.struct_type({'id': BIGINT, 'name': VARCHAR})
+
+map_type(key_type, value_type)
+-----------------------------
+map_t = conn.map_type(VARCHAR, INTEGER)  # MAP(VARCHAR, INTEGER)
+
+decimal_type(width, scale)
+-------------------------
+decimal_t = conn.decimal_type(10, 2)  # DECIMAL(10, 2)
+
+union_type(members)
+------------------
+# Using list
+union_t = conn.union_type([BIGINT, VARCHAR])
+
+# Using dict with names
+union_t = conn.union_type({'id': BIGINT, 'name': VARCHAR})
+
+string_type(collation=None)
+--------------------------
+string_t = conn.string_type(collation='nocase')
+
+================================================================================
+6. EXPRESSION API
+================================================================================
+
+The Expression API allows building queries programmatically (SAFE from SQL injection).
+
+EXPRESSION TYPES
+----------------
+
+ColumnExpression(column_name)
+-----------------------------
+References a column by name:
+
+from duckdb import ColumnExpression
+
+col = ColumnExpression('age')
+rel = conn.table('users').select(col)
+
+# With operations
+col = ColumnExpression('price') * 2
+rel = conn.table('products').select(col)
+
+StarExpression(exclude=None)
+----------------------------
+Select all columns, optionally excluding some:
+
+from duckdb import StarExpression
+
+# Select all columns
+star = StarExpression()
+rel = conn.table('data').select(star)
+
+# Exclude specific columns
+star = StarExpression(exclude=['password', 'secret'])
+rel = conn.table('users').select(star)
+
+ConstantExpression(value)
+------------------------
+Represents a constant value:
+
+from duckdb import ConstantExpression
+
+const = ConstantExpression(42)
+rel = conn.table('data').select(const)
+
+text_const = ConstantExpression('hello')
+
+CaseExpression(condition, value)
+--------------------------------
+Create CASE expressions:
+
+from duckdb import CaseExpression, ColumnExpression, ConstantExpression
+
+case = CaseExpression(
+    condition=ColumnExpression('age') < 18,
+    value=ConstantExpression('minor')
+).when(
+    condition=ColumnExpression('age') >= 65,
+    value=ConstantExpression('senior')
+).otherwise(
+    ConstantExpression('adult')
+)
+
+rel = conn.table('users').select(case.alias('age_group'))
+
+FunctionExpression(function_name, *args)
+---------------------------------------
+Call functions with expression arguments:
+
+from duckdb import FunctionExpression, ColumnExpression, ConstantExpression
+
+# concat(first_name, ' ', last_name)
+full_name = FunctionExpression('concat',
+    ColumnExpression('first_name'),
+    ConstantExpression(' '),
+    ColumnExpression('last_name')
+)
+
+rel = conn.table('users').select(full_name.alias('full_name'))
+
+SQLExpression(sql_string)
+-------------------------
+Embed SQL string (use cautiously):
+
+from duckdb import SQLExpression
+
+# This is safe if sql_string doesn't contain user input
+expr = SQLExpression("CASE WHEN x > 0 THEN 'positive' ELSE 'negative' END")
+rel = conn.table('data').select(expr.alias('sign'))
+
+COMMON OPERATIONS
+-----------------
+
+alias(name)
+----------
+Set alias for expression:
+expr = ColumnExpression('price').alias('item_price')
+
+cast(type)
+---------
+Cast expression to type:
+from duckdb.typing import INTEGER
+expr = ColumnExpression('string_number').cast(INTEGER)
+
+isin(*values)
+------------
+Create IN expression:
+expr = ColumnExpression('status').isin(
+    ConstantExpression('active'),
+    ConstantExpression('pending')
+)
+
+isnotin(*values)
+---------------
+Create NOT IN expression:
+expr = ColumnExpression('status').isnotin(
+    ConstantExpression('deleted'),
+    ConstantExpression('archived')
+)
+
+isnull()
+-------
+Check if NULL:
+expr = ColumnExpression('optional_field').isnull()
+
+isnotnull()
+----------
+Check if NOT NULL:
+expr = ColumnExpression('required_field').isnotnull()
+
+ARITHMETIC OPERATIONS
+--------------------
+Expressions support standard operators:
+
+# Arithmetic
+ColumnExpression('x') + ColumnExpression('y')
+ColumnExpression('price') * ConstantExpression(1.1)
+ColumnExpression('total') / ColumnExpression('count')
+ColumnExpression('value') - ConstantExpression(10)
+
+# Comparison
+ColumnExpression('age') > ConstantExpression(18)
+ColumnExpression('status') == ConstantExpression('active')
+ColumnExpression('price') <= ConstantExpression(100)
+ColumnExpression('name') != ConstantExpression('')
+
+# Logical
+expr1 & expr2  # AND
+expr1 | expr2  # OR
+
+ORDER OPERATIONS
+---------------
+For use with order() method:
+
+asc()
+----
+expr = ColumnExpression('age').asc()
+rel = conn.table('users').order(expr)
+
+desc()
+-----
+expr = ColumnExpression('price').desc()
+rel = conn.table('products').order(expr)
+
+nulls_first()
+------------
+expr = ColumnExpression('optional_date').asc().nulls_first()
+
+nulls_last()
+-----------
+expr = ColumnExpression('updated_at').desc().nulls_last()
+
+SAFE FILTERING EXAMPLE
+---------------------
+# SAFE - Using Expressions instead of string concatenation
+from duckdb import ColumnExpression, ConstantExpression
+
+def safe_filter(conn, table_name, column_name, operator, value):
+    """Safe filtering using Expression API"""
+    rel = conn.table(table_name)
+    col = ColumnExpression(column_name)
+    val = ConstantExpression(value)
+    
+    if operator == '>':
+        condition = col > val
+    elif operator == '>=':
+        condition = col >= val
+    elif operator == '<':
+        condition = col < val
+    elif operator == '<=':
+        condition = col <= val
+    elif operator == '==':
+        condition = col == val
+    elif operator == '!=':
+        condition = col != val
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+    
+    return rel.filter(condition)
+
+# Usage:
+result = safe_filter(conn, 'users', 'age', '>', 18)
+
+OUTPUT METHODS (Trigger Execution)
+----------------------------------
+These methods execute the query and retrieve results.
+
+fetchall()
+----------
+Execute and fetch all rows as a list of tuples:
+result = rel.fetchall()
+# Returns: [(val1, val2, ...), (val1, val2, ...), ...]
+
+fetchone()
+----------
+Execute and fetch a single row as a tuple:
+row = rel.fetchone()
+# Returns: (val1, val2, ...) or None
+
+fetchmany(size=1)
+----------------
+Execute and fetch the next set of rows:
+batch = rel.fetchmany(size=10)
+# Returns: [(val1, val2, ...), ...] up to 'size' rows
+
+WARNING: Executing operations during fetchone()/fetchmany() will close the result set.
+
+show(max_width=None, max_rows=None, max_col_width=None, null_value=None, render_mode=None)
+-----------------------------------------------------------------------------------------
+Display a summary of the data:
+rel.show()  # Shows first ~10K rows in formatted table
+rel.show(max_rows=100, max_width=120)
+
+to_df() / df() / fetchdf()
+-------------------------
+Execute and fetch all rows as pandas DataFrame:
+df = rel.to_df()
+df = rel.df(date_as_object=False)
+df = rel.fetchdf()
+
+to_arrow_table() / arrow() / fetch_arrow_table()
+-----------------------------------------------
+Execute and fetch as Arrow Table:
+arrow_table = rel.to_arrow_table(batch_size=1000000)
+arrow_table = rel.arrow()
+arrow_table = rel.fetch_arrow_table()
+
+fetch_arrow_reader(batch_size=1000000)
+-------------------------------------
+Execute and return Arrow Record Batch Reader:
+reader = rel.fetch_arrow_reader(batch_size=10000)
+for batch in reader:
+    process(batch)
+
+fetch_df_chunk(vectors_per_chunk=1, date_as_object=False)
+---------------------------------------------------------
+Execute and fetch a chunk of rows as DataFrame:
+chunk = rel.fetch_df_chunk(vectors_per_chunk=5)
+
+fetchnumpy()
+-----------
+Execute and fetch as dict mapping columns to numpy arrays:
+numpy_dict = rel.fetchnumpy()
+# Returns: {'col1': np.array([...]), 'col2': np.array([...])}
+
+pl(batch_size=1000000, lazy=False)
+---------------------------------
+Execute and fetch as Polars DataFrame:
+polars_df = rel.pl()
+polars_lazy = rel.pl(lazy=True)
+
+record_batch(batch_size=1000000)
+-------------------------------
+Execute and return Arrow Record Batch Reader:
+batch_reader = rel.record_batch(batch_size=5000)
+
+torch()
+------
+Fetch as dict of PyTorch Tensors:
+tensors = rel.select('numeric_col1', 'numeric_col2').torch()
+# Returns: {'col1': tensor([...]), 'col2': tensor([...])}
+
+tf()
+---
+Fetch as dict of TensorFlow Tensors:
+tf_tensors = rel.select('numeric_col1', 'numeric_col2').tf()
+# Returns: {'col1': <tf.Tensor>, 'col2': <tf.Tensor>}
+
+to_table(table_name) / create(table_name)
+----------------------------------------
+Creates a new table with the relation contents:
+rel.to_table('my_table')
+rel.create('my_table')
+
+to_view(view_name, replace=True) / create_view(view_name, replace=True)
+----------------------------------------------------------------------
+Creates a view that refers to the relation:
+rel.to_view('my_view', replace=True)
+rel.create_view('my_view')
+
+to_csv(file_name, **kwargs) / write_csv(file_name, **kwargs)
+-----------------------------------------------------------
+Write relation to CSV file:
+rel.to_csv('output.csv')
+rel.write_csv('output.csv', 
+              sep=',',
+              header=True,
+              compression='gzip',
+              partition_by=['year', 'month'])
+
+CSV Parameters:
+- sep: Field delimiter (default: ',')
+- na_rep: Missing data representation (default: '')
+- header: Write column headers (default: True)
+- quotechar: Quote character (default: '"')
+- escapechar: Escape character
+- date_format: Custom date format
+- timestamp_format: Custom timestamp format
+- encoding: Character encoding (default: 'utf-8')
+- compression: 'gzip', 'bz2', 'zstd' or 'auto'
+- partition_by: List of columns for partitioning
+- per_thread_output: One file per thread (default: False)
+- use_tmp_file: Use temporary file (default: False)
+
+to_parquet(file_name, **kwargs) / write_parquet(file_name, **kwargs)
+-------------------------------------------------------------------
+Write relation to Parquet file:
+rel.to_parquet('output.parquet')
+rel.write_parquet('output.parquet',
+                  compression='snappy',
+                  row_group_size=122880,
+                  partition_by=['year', 'month'])
+
+Parquet Parameters:
+- compression: 'uncompressed', 'snappy', 'gzip', 'zstd', 'brotli', 'lz4', 'lz4_raw'
+- field_ids: Field IDs for each column
+- row_group_size: Rows per group (default: 122880)
+- row_group_size_bytes: Bytes per group
+- overwrite: Overwrite existing files (default: False)
+- per_thread_output: One file per thread (default: False)
+- use_tmp_file: Use temporary file (default: False)
+- partition_by: List of columns for partitioning
+- write_partition_columns: Write partition cols to files (default: False)
+- append: Generate new filenames to avoid overwrite (default: False)
+
+execute()
+--------
+Transform the relation into a result set:
+result_rel = rel.execute()
+
+close()
+------
+Closes the result:
+rel.close()
+
+================================================================================
+7. BEST PRACTICES & OPTIMIZATION TIPS
+================================================================================
+
+LAZY EVALUATION BEST PRACTICES
+-------------------------------
+
+1. Chain operations before execution:
+   rel = (conn.read_parquet('data.parquet')
+          .filter("status = 'active'")
+          .select('id', 'name', 'amount')
+          .aggregate('SUM(amount)', 'name')
+          .order('SUM(amount) DESC')
+          .limit(10))
+   # Only now execute
+   rel.show()
+
+2. Use explain() to understand query plan:
+   rel.explain()  # See what DuckDB will do
+
+3. Avoid premature materialization:
+   # BAD - Forces execution twice
+   temp_df = rel.to_df()
+   result = conn.from_df(temp_df).filter('x > 10')
+   
+   # GOOD - Keep as relation
+   result = rel.filter('x > 10')
+
+MEMORY OPTIMIZATION
+-------------------
+
+1. Read only needed columns:
+   rel = conn.read_parquet('large.parquet', 
+                           columns=['id', 'name', 'value'])
+
+2. Filter early in the pipeline:
+   rel = (conn.read_parquet('data.parquet')
+          .filter("date >= '2024-01-01'")  # Filter first
+          .select('*'))
+
+3. Use limit for exploration:
+   sample = rel.limit(1000)  # Work with small sample first
+   sample.to_df()
+
+4. Partition large operations:
+   # Process data in chunks
+   for partition in partitions:
+       rel = conn.read_parquet(f'data/partition_{partition}.parquet')
+       rel.to_table('results', append=True)
+
+FILE FORMAT OPTIMIZATION
+-----------------------
+
+1. Prefer Parquet over CSV:
+   # Faster, compressed, columnar
+   rel = conn.read_parquet('data.parquet')
+
+2. Use Hive partitioning for large datasets:
+   rel = conn.read_parquet('data/**/*.parquet', 
+                           hive_partitioning=True)
+
+3. Enable parallel reading:
+   rel = conn.read_csv('data.csv', parallel=True)
+
+SQL INJECTION PREVENTION CHECKLIST
+----------------------------------
+
+✓ Use parameterized queries with params argument
+✓ Use Expression API for dynamic conditions
+✓ Validate and whitelist column/table names if dynamic
+✓ Use relational API methods instead of string SQL
+✓ Never use f-strings or .format() with user input in SQL
+✓ Use ConstantExpression for user-provided values
+✓ Use prepared statements for repeated queries
+
+PERFORMANCE TIPS
+----------------
+
+1. Use Arrow UDFs instead of native:
+   # 10-100x faster for batch operations
+   conn.create_function('my_func', func, type='arrow')
+
+2. Batch inserts:
+   # SLOW
+   for row in rows:
+       rel.insert(row)
+   
+   # FAST
+   df = pd.DataFrame(rows)
+   conn.from_df(df).insert_into('table')
+
+3. Use appropriate data types:
+   # Smaller types = less memory
+   # Use TINYINT instead of BIGINT if values fit
+   # Use DATE instead of TIMESTAMP if time not needed
+
+4. Create indexes for frequent queries:
+   conn.execute("CREATE INDEX idx_user_id ON orders(user_id)")
+
+5. Use views for complex queries:
+   conn.execute("""
+       CREATE VIEW user_summary AS
+       SELECT user_id, SUM(amount) as total
+       FROM orders
+       GROUP BY user_id
+   """)
+   rel = conn.view('user_summary')
+
+6. Analyze tables for better query plans:
+   conn.execute("ANALYZE table_name")
+
+DEBUGGING TIPS
+--------------
+
+1. Use explain() to see query plan:
+   print(rel.explain())
+
+2. Use sql_query() to see generated SQL:
+   print(rel.sql_query())
+
+3. Use describe() to understand data:
+   rel.describe().show()
+
+4. Sample data for quick checks:
+   rel.limit(10).show()
+
+5. Check column types:
+   print(rel.columns)
+   print(rel.dtypes)
+
+COMMON PATTERNS
+---------------
+
+Pattern 1: Safe user filtering
+------------------------------
+def filter_by_user_input(conn, user_value):
+    from duckdb import ColumnExpression, ConstantExpression
+    
+    rel = conn.table('data')
+    condition = ColumnExpression('category') == ConstantExpression(user_value)
+    return rel.filter(condition)
+
+Pattern 2: Dynamic column selection
+-----------------------------------
+def select_columns(conn, table, columns):
+    # Validate columns
+    valid_columns = conn.table(table).columns
+    safe_cols = [c for c in columns if c in valid_columns]
+    
+    return conn.table(table).select(*safe_cols)
+
+Pattern 3: Batch processing
+---------------------------
+def process_large_dataset(conn, input_path, output_table):
+    import glob
+    
+    for file in glob.glob(f"{input_path}/*.parquet"):
+        rel = (conn.read_parquet(file)
+               .filter("status = 'valid'")
+               .select('id', 'value', 'timestamp'))
+        
+        rel.insert_into(output_table)
+
+Pattern 4: Incremental aggregation
+----------------------------------
+def incremental_sum(conn, new_data_df):
+    # Load existing aggregates
+    existing = conn.table('aggregates')
+    
+    # Process new data
+    new_agg = (conn.from_df(new_data_df)
+               .aggregate('SUM(amount)', 'category'))
+    
+    # Combine
+    combined = existing.union(new_agg)
+    result = combined.aggregate('SUM(sum_amount)', 'category')
+    
+    result.to_table('aggregates', mode='replace')
+
+Pattern 5: Safe JOIN with user input
+------------------------------------
+def safe_join_query(conn, left_table, right_table, join_column):
+    # Validate join column exists in both tables
+    left_cols = conn.table(left_table).columns
+    right_cols = conn.table(right_table).columns
+    
+    if join_column not in left_cols or join_column not in right_cols:
+        raise ValueError("Invalid join column")
+    
+    left = conn.table(left_table)
+    right = conn.table(right_table)
+    
+    return left.join(right, condition=join_column, how='inner')
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
+
+QUICK REFERENCE CARD
+====================
+
+Connect:           conn = duckdb.connect('file.db')
+Read CSV:          rel = conn.read_csv('file.csv')
+Read Parquet:      rel = conn.read_parquet('file.parquet')
+From DataFrame:    rel = conn.from_df(df)
+From SQL:          rel = conn.sql("SELECT * FROM data")
+
+Filter (safe):     rel.filter(ColumnExpression('x') > ConstantExpression(10))
+Select:            rel.select('col1', 'col2')
+Aggregate:         rel.aggregate('SUM(amount)', 'category')
+Join:              rel1.join(rel2, 'join_col', how='left')
+Limit:             rel.limit(100)
+Order:             rel.order('col DESC')
+
+Execute:           rel.show()
+                   rel.to_df()
+                   rel.to_table('name')
+                   rel.fetchall()
+
+Parameterized:     conn.sql("SELECT * FROM t WHERE id = $1", params=[value])
+
+Create UDF:        conn.create_function('name', func, [BIGINT], VARCHAR)
+
+Type constants:    from duckdb.typing import BIGINT, VARCHAR, TIMESTAMP
+Expressions:       from duckdb import ColumnExpression, ConstantExpression
+
+Remember: Relations are LAZY - nothing executes until you call an output method!
+Remember: ALWAYS use parameterized queries or Expression API with user input!
+
+================================================================================
