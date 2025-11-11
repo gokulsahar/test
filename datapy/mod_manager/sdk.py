@@ -7,9 +7,23 @@ orchestration. No file management - simple console output for shell script captu
 
 import argparse
 import importlib
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, Tuple
+import uuid
+from pathlib import Path
+import os
+import sys
+import traceback         
+import contextlib
 
-from .context import set_context as _set_context, clear_context as _clear_context, substitute_context_variables
+from .context import (
+    setup_context as _setup_context,
+    clear_context as _clear_context,
+    get_context,      
+    update_context,
+    clear_runtime_context,  
+    substitute_context_variables,
+    get_context_info as _get_context_info
+)
 from .logger import setup_logger, set_log_level as _set_log_level, DEFAULT_LOG_CONFIG
 from .params import create_resolver
 from .result import ModResult, validation_error, runtime_error
@@ -28,7 +42,7 @@ def set_context(file_path: str) -> None:
     Raises:
         ValueError: If file_path is empty
     """
-    _set_context(file_path)
+    _setup_context(file_path)
 
 
 def clear_context() -> None:
@@ -389,16 +403,18 @@ def setup_context(context_path: str = None) -> None:
     else:  # No command line, no explicit path - don't set context
         return
     
-    # Set context using existing SDK function
+    # Set context using existing SDK wrapper
     set_context(final_context_path)
     
     
 def get_context_value(variable_path: str) -> Any:
     """
+    DEPRECATED: Use get_context() instead.
+    
     Get a context value by path, loading context if needed.
     
-    Enables access to control variables before mod execution for flow control.
-    Context is loaded once and cached for the entire execution session.
+    This function is maintained for backward compatibility.
+    New code should use get_context() which supports defaults and runtime context.
     
     Args:
         variable_path: Dot-separated path like 'feature.enabled' or 'db.host'
@@ -407,27 +423,25 @@ def get_context_value(variable_path: str) -> Any:
         Value from context (preserves original type: str, int, bool, list, dict, etc.)
         
     Raises:
-        RuntimeError: If no context file is set or context loading fails
+        RuntimeError: If no context file is set
         ValueError: If variable_path is invalid or not found in context
         
     Examples:
-        # Set context first
-        set_context("config.json")
+        # Old style (deprecated)
+        db_host = get_context_value("database.host")
         
-        # Access control variables for flow control
-        if get_context_value("processing.enable_validation"):
-            run_validation_pipeline()
-        
-        batch_size = get_context_value("processing.batch_size")
-        debug_mode = get_context_value("app.debug")
-        
-        # Works with nested paths
-        db_host = get_context_value("database.primary.host")
+        # New style (recommended)
+        db_host = get_context("database.host")
     """
-    from .context import _context_file_path, _load_context_data, _get_context_value
-    
+    import warnings
+    warnings.warn(
+        "get_context_value() is deprecated, use get_context() instead",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    from .context import _context_file_path
     if not _context_file_path:
-        raise RuntimeError("No context file set - call set_context() first")
+        raise RuntimeError("No context loaded - call setup_context() first")
     
     if not variable_path or not isinstance(variable_path, str):
         raise ValueError("variable_path must be a non-empty string")
@@ -436,15 +450,216 @@ def get_context_value(variable_path: str) -> Any:
     if not variable_path:
         raise ValueError("variable_path cannot be empty or whitespace only")
     
+    # Use new get_context() function
+    value = get_context(variable_path)
+    
+    if value is None:
+        raise ValueError(f"Context variable not found: ${{{variable_path}}}")
+    
+    return value
+
+def _resolve_job_path(job_script: Union[str, Path]) -> Path:
+    p = Path(job_script).resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Job script not found: {job_script}")
+    if not p.is_file():
+        raise IsADirectoryError(f"Job script path is not a file: {job_script}")
+    if p.suffix != ".py":
+        # Keep as warning, behavior remains permissive
+        logger.warning("Job script does not end with .py: %s", p)
+    return p
+
+
+def _apply_thread_context(job_dir: str, context_vars: Dict[str, Any]) -> None:
+    update_context("is_subjob", True)
+    update_context("job_dir", job_dir)
+    for k, v in context_vars.items():
+        update_context(k, v)
+
+# --------------------------- module loading ---------------------------
+
+def _load_job_module(unique_name: str, job_path: Path):
+    spec = importlib.util.spec_from_file_location(unique_name, str(job_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load job script: {job_path}")
+    module = importlib.util.module_from_spec(spec)
+    # register early so relative imports inside the module can see it by name
+    sys.modules[unique_name] = module
+    module.__file__ = str(job_path)
+    module.__package__ = None  # treat as a top-level script
+    spec.loader.exec_module(module)
+    return module
+
+# --------------------------- module cleanup ---------------------------
+
+def _normalized_prefixes(unique_name: str, job_dir: str) -> Tuple[str, str]:
+    """Precompute normalized patterns for membership checks."""
+    # Prefix used to match children of the dynamic module
+    dotted_prefix = unique_name + "."
+    # Normalized directory prefix for __file__ checks
+    job_dir_norm = os.path.normcase(os.path.normpath(job_dir)) + os.sep
+    return dotted_prefix, job_dir_norm
+
+
+def _collect_modules_for_removal(unique_name: str, job_dir: str) -> set[str]:
+    """
+    Return the set of module names to remove:
+      - the dynamic module itself
+      - any of its children (name startswith '<unique_name>.')
+      - any module whose __file__ lives under job_dir (best-effort)
+    """
+    dotted_prefix, job_dir_norm = _normalized_prefixes(unique_name, job_dir)
+    to_delete: set[str] = set()
+
+    # First pass: unique module + children by prefix
+    for name in tuple(sys.modules):
+        if name == unique_name or name.startswith(dotted_prefix):
+            to_delete.add(name)
+
+    # Second pass: anything loaded from job_dir (best-effort)
+    for name, mod in tuple(sys.modules.items()):
+        if name in to_delete or mod is None:
+            continue
+        f = getattr(mod, "__file__", None)
+        if not f:
+            continue
+        try:
+            if os.path.normcase(os.path.normpath(f)).startswith(job_dir_norm):
+                to_delete.add(name)
+        except Exception:
+            # Non-fatal: path normalization oddities
+            continue
+
+    return to_delete
+
+
+def _invoke_optional_cleanup(unique_name: str) -> None:
+    """If the loaded module exposes cleanup(), invoke it (best-effort)."""
+    mod = sys.modules.get(unique_name)
+    if not mod:
+        return
+    cleanup = getattr(mod, "cleanup", None)
+    if callable(cleanup):
+        try:
+            cleanup()
+        except Exception:
+            logger.warning("sub-job cleanup() raised; continuing", exc_info=True)
+
+
+def _remove_modules(module_names: set[str]) -> None:
+    """Remove modules from sys.modules; log (but do not raise) on failures."""
+    for name in module_names:
+        try:
+            del sys.modules[name]
+        except Exception:
+            logger.warning("Failed to remove module %s from sys.modules", name, exc_info=True)
+
+
+def _cleanup_modules(unique_name: str, job_dir: str) -> None:
+    """
+    Remove the dynamically-loaded module, its children, and any module whose
+    __file__ resides under job_dir (best-effort). Kept intentionally defensive.
+    """
     try:
-        context_data = _load_context_data()
-        return _get_context_value(variable_path, context_data)
-    except RuntimeError as e:
-        # Re-raise context loading errors with more context
-        raise RuntimeError(f"Failed to load context for variable '{variable_path}': {e}")
-    except ValueError as e:
-        # Re-raise variable access errors as-is (already have good error messages)
+        to_delete = _collect_modules_for_removal(unique_name, job_dir)
+        _invoke_optional_cleanup(unique_name)
+        _remove_modules(to_delete)
+    except Exception:
+        # Never let cleanup failures bubble up and poison host threads
+        logger.warning("Module cleanup encountered an error", exc_info=True)
+
+# --------------------------- execution helpers ---------------------------
+
+def _error_payload(message: str, etype: str, trace: bool = False) -> Dict[str, Any]:
+    payload = {"status": "error", "error": {"message": message, "type": etype}}
+    if trace:
+        payload["error"]["trace"] = traceback.format_exc()
+    return payload
+
+
+def _execute_main(module) -> Dict[str, Any]:
+    """
+    Execute module.main(); ignore its return (state flows through context).
+    Re-raise KeyboardInterrupt; contain SystemExit to avoid killing the host thread.  # NOSONAR
+    """
+    main = getattr(module, "main", None)
+    if not callable(main):
+        raise AttributeError("Job script must define a main() function")
+
+    try:
+        _ = main()
+        return {"status": "success"}
+    except KeyboardInterrupt:
+        raise
+    except SystemExit as se:  # NOSONAR
+        code = getattr(se, "code", None)
+        msg = f"Child job attempted to exit (code {code})"
+        logger.error(msg, exc_info=True)
+        return _error_payload(msg, "SystemExit", trace=False)
+
+# --------------------------- guard utilities ---------------------------
+
+def _guard_no_trace(fn, *args, **kwargs) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    """Call fn; on non-Keyboard exceptions, log and return an error payload without stack trace."""
+    try:
+        return fn(*args, **kwargs), None
+    except KeyboardInterrupt:
         raise
     except Exception as e:
-        # Catch any unexpected errors
-        raise RuntimeError(f"Unexpected error accessing context variable '{variable_path}': {e}")
+        logger.error("%s failed", getattr(fn, "__name__", "call"), exc_info=True)
+        return None, _error_payload(str(e), type(e).__name__, trace=False)
+
+
+def _guard_trace(fn, *args, **kwargs) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    """Call fn; on non-Keyboard exceptions, log and return an error payload with stack trace."""
+    try:
+        return fn(*args, **kwargs), None
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        logger.error("%s failed", getattr(fn, "__name__", "call"), exc_info=True)
+        return None, _error_payload(str(e), type(e).__name__, trace=True)
+
+# --------------------------- lifecycle wrapper ---------------------------
+
+@contextlib.contextmanager
+def _module_lifecycle(unique_name: str, job_dir: str):
+    try:
+        yield
+    finally:
+        _cleanup_modules(unique_name, job_dir)
+
+# ------------------------------- API ------------------------------------
+
+def run_job(job_script: Union[str, Path], /, *, clear_runtime: bool = True, **context_vars: Any) -> Dict[str, Any]:
+
+    """
+    Thread-safe sub-job runner (no cwd/sys.path mutations).
+    Contract:
+      - On success: {'status': 'success'}
+      - On error:   {'status': 'error', 'error': {'message','type','trace?'}}
+    All data exchange happens via thread-local context (update_context).
+    """
+    job_path, err = _guard_no_trace(_resolve_job_path, job_script)
+    if err:
+        return err
+
+    job_dir = str(job_path.parent)
+    try:
+        _, err = _guard_no_trace(_apply_thread_context, job_dir, context_vars)
+        if err:
+            return err
+
+        unique_name = f"subjob_{job_path.stem}_{uuid.uuid4().hex}"
+
+        with _module_lifecycle(unique_name, job_dir):
+            module, err = _guard_trace(_load_job_module, unique_name, job_path)
+            if err:
+                return err
+            result, err = _guard_trace(_execute_main, module)
+            if err:
+                return err
+            return result
+    finally:
+        if clear_runtime:         # By default when the child job finishes the runtime context is cleared, i needed (when child writes something to context that is needed by the parent dont clear it)
+            clear_runtime_context()

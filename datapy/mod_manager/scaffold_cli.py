@@ -18,17 +18,36 @@ from .result import VALIDATION_ERROR, RUNTIME_ERROR, SUCCESS
 PIPELINE_TEMPLATE = '''"""
 Pipeline Name: {job_name}
 Description: TODO - Add pipeline description here
+
+This pipeline can be executed:
+1. Standalone: python {job_name}_pipeline.py
+2. As sub-job: Called by parent via run_job()
 """
 
-from datapy.mod_manager.sdk import run_mod, setup_logging, setup_context, get_context_value
+from datapy.mod_manager.sdk import run_mod, setup_logging, setup_context, get_context
 from datapy.utils.script_monitor import monitor_execution
 
 
 def pre_run():
-    """Setup logging and context."""
-    logger = setup_logging("INFO", "{job_name}_pipeline.py")  
-    setup_context("{job_name}_context.json")
-    logger.info("Starting {job_name} pipeline")
+    """
+    Setup logging and context.
+    
+    Returns:
+        Configured logger instance
+    """
+    logger = setup_logging("INFO", "{job_name}_pipeline.py")
+    
+    # Check if running as sub-job (parent already set context)
+    is_subjob = bool(get_context("is_subjob", False))
+
+    if not is_subjob:
+        # Standalone mode - load own context
+        setup_context("{job_name}_context.json")
+        logger.info("Starting {job_name} pipeline (standalone mode)")
+    else:
+        # Sub-job mode - using parent's context
+        logger.info("Starting {job_name} pipeline (sub-job mode)")
+    
     return logger
 
 
@@ -36,42 +55,44 @@ def run_pipeline(logger):
     """
     Main pipeline execution.
     
-    TODO: Implement your pipeline logic here.
+    Args:
+        logger: Logger instance from pre_run()    
     
-    Example workflow:
-    1. Read data: run_mod("csv_reader", {{"file_path": "${{data.input_path}}/input.csv"}})
-    2. Transform: run_mod("csv_filter", {{"data": data["artifacts"]["data"]}})
-    3. Write output: run_mod("csv_writer", {{"data": processed["artifacts"]["filtered_data"]}})
     """
     logger.info("Pipeline execution not yet implemented")
     
-    # Add your mod executions here
+    # TODO: Add your mod executions here
     
-    result = {{"status": "success", "metrics": {{}}, "artifacts": {{}}, "errors": []}}
-    return result
-
-
-def post_run(logger, result):
-    """Final reporting."""
-    if result["status"] in ["success", "warning"]:
-        logger.info("Pipeline completed successfully!")
-    else:
-        logger.error(f"Pipeline failed: {{result.get('errors', [])}}")
+def post_run(logger):
+    """
+    Final reporting and cleanup.
+    
+    Args:
+        logger: Logger instance
+    """
+    logger.info("End of {job_name}_pipeline.py")
 
 
 @monitor_execution("{job_name}")
 def main():
-    """Execute complete pipeline."""
-    logger = pre_run()
-    result = run_pipeline(logger)
-    post_run(logger, result)
-    return result["status"] in ["success", "warning"]
+    """
+    Execute complete pipeline.
+    """    
+    try:
+        logger = pre_run()
+        run_pipeline(logger)
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {{e}}", exc_info=True)
+    finally:
+        post_run(logger)
 
 
 if __name__ == "__main__":
-    import sys
-    success = main()
-    sys.exit(0 if success else 1)
+    try:
+        main() 
+    except Exception:
+        import sys
+        sys.exit(1)
 '''
 
 

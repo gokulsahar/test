@@ -1,17 +1,17 @@
 """
 Context file management for variable substitution in DataPy framework.
 
-Provides lazy-loading context from JSON files for ${} variable substitution
-without any integration with global config - context is the single source
-for all variable substitution needs.
+Provides eager-loading context from JSON files for ${} variable substitution
+with thread-safe runtime context overrides.
 """
 
 import json
 import re
+import threading
+import warnings
 from pathlib import Path
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 import sys
-from pathlib import Path
 
 from .logger import setup_logger
 
@@ -21,6 +21,10 @@ logger = setup_logger(__name__)
 _context_file_path: Optional[str] = None
 _context_data: Optional[Dict[str, Any]] = None
 _substitution_pattern = re.compile(r'\$\{([^}]+)\}')
+
+# Thread-local storage for runtime context
+_thread_local = threading.local()
+
 
 def _get_script_directory() -> Path:
     """
@@ -42,28 +46,27 @@ def _get_script_directory() -> Path:
         return Path.cwd()
 
 
-def set_context(file_path: str) -> None:
+def setup_context(file_path: str) -> None:
     """
-    Set context file path for variable substitution.
+    Load context from file immediately (fail-fast, eager loading).
     
     Relative paths are resolved from the script's directory (sys.argv[0] location).
     Absolute paths are used as-is.
-    
-    File is loaded lazily when substitution is first needed.
     
     Args:
         file_path: Path to context JSON file (relative or absolute)
         
     Raises:
         ValueError: If file_path is empty
+        RuntimeError: If context file cannot be loaded
         
     Examples:
         # Relative path - resolved from script directory
-        set_context("context.json")
-        set_context("config/production.json")
+        setup_context("context.json")
+        setup_context("config/production.json")
         
         # Absolute path - used as-is
-        set_context("/full/path/to/context.json")
+        setup_context("/full/path/to/context.json")
     """
     global _context_file_path, _context_data
     
@@ -79,10 +82,45 @@ def set_context(file_path: str) -> None:
         context_path = script_dir / file_path
         logger.debug(f"Resolving relative context path from script directory: {script_dir}")
     
-    _context_file_path = str(context_path)
-    _context_data = None  # Reset cached data
+    # Validate path
+    if not context_path.exists():
+        raise RuntimeError(f"Context file not found: {context_path}")
     
-    logger.debug(f"Context file set: {_context_file_path}")
+    if not context_path.is_file():
+        raise RuntimeError(f"Context path is not a file: {context_path}")
+    
+    # EAGER LOAD - fail fast
+    try:
+        with open(context_path, 'r', encoding='utf-8') as f:
+            _context_data = json.load(f)
+        
+        if not isinstance(_context_data, dict):
+            raise RuntimeError(f"Context file must contain a JSON dictionary: {context_path}")
+        
+        _context_file_path = str(context_path)
+        logger.info(f"Context loaded: {len(_context_data)} keys from {context_path}")
+        
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Invalid JSON in context file {context_path}: {e}")
+    except PermissionError as e:
+        raise RuntimeError(f"Cannot read context file {context_path}: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load context file {context_path}: {e}")
+
+
+def set_context(file_path: str) -> None:
+    """
+    DEPRECATED: Use setup_context() instead.
+    
+    Set context file path for variable substitution.
+    This function is maintained for backward compatibility.
+    """
+    warnings.warn(
+        "set_context() is deprecated, use setup_context() instead",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    setup_context(file_path)
 
 
 def clear_context() -> None:
@@ -95,56 +133,104 @@ def clear_context() -> None:
     logger.debug("Context cleared")
 
 
-def _load_context_data() -> Dict[str, Any]:
+def get_context(key_path: str, default: Any = None) -> Any:
     """
-    Load context data from JSON file with validation.
+    Get value from context (runtime > file), thread-safe.
     
+    Checks thread-local runtime context first, then falls back to file context.
+    Returns default if key not found in either.
+    
+    Args:
+        key_path: Dot-separated path like 'db.host' or 'app.name'
+        default: Value to return if key not found (default: None)
+        
     Returns:
-        Context data dictionary
+        Value from context (preserves original type) or default if not found
         
-    Raises:
-        RuntimeError: If context file cannot be loaded
+    Examples:
+        # Get values with type preservation
+        db_host = get_context("database.host")
+        db_port = get_context("database.port")  # Returns int
+        debug_mode = get_context("app.debug")  # Returns bool
+        
+        # With default value
+        timeout = get_context("api.timeout", default=30)
     """
-    global _context_data
+    # Check thread-local runtime context first (highest priority)
+    if hasattr(_thread_local, 'runtime_context'):
+        try:
+            value = _thread_local.runtime_context
+            for key in key_path.split('.'):
+                value = value[key]
+            return value
+        except (KeyError, TypeError):
+            pass  # Fall through to file context
     
-    if _context_data is not None:
-        return _context_data
+    # Check file context
+    if _context_data:
+        try:
+            value = _context_data
+            for key in key_path.split('.'):
+                value = value[key]
+            return value
+        except (KeyError, TypeError):
+            pass  # Fall through to default
     
-    if not _context_file_path:
-        raise RuntimeError("No context file set - call set_context() first")
+    # Key not found in either context
+    logger.debug(f"Context key not found: {key_path}, returning default: {default}")
+    return default
+
+
+def update_context(key_path: str, value: Any) -> None:
+    """
+    Update runtime context (thread-local, writable).
     
-    try:
-        context_file = Path(_context_file_path)
+    Runtime context takes precedence over file context for the current thread.
+    This allows temporary overrides without modifying the context file.
+    
+    Args:
+        key_path: Dot-separated path like 'db.host' or 'app.name'
+        value: Value to set (any JSON-serializable type)
         
-        if not context_file.exists():
-            raise RuntimeError(f"Context file not found: {_context_file_path}")
+    Examples:
+        # Set runtime overrides
+        update_context("database.host", "override-db.example.com")
+        update_context("processing.batch_size", 1000)
+        update_context("features.experimental", True)
         
-        if not context_file.is_file():
-            raise RuntimeError(f"Context path is not a file: {_context_file_path}")
-        
-        with open(context_file, 'r', encoding='utf-8') as f:
-            _context_data = json.load(f)
-        
-        if not isinstance(_context_data, dict):
-            raise RuntimeError(f"Context file must contain a JSON dictionary: {_context_file_path}")
-        
-        logger.debug(f"Context loaded: {len(_context_data)} top-level keys")
-        return _context_data
-        
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Invalid JSON in context file {_context_file_path}: {e}")
-    except PermissionError as e:
-        raise RuntimeError(f"Cannot read context file {_context_file_path}: {e}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load context file {_context_file_path}: {e}")
+        # Nested paths are automatically created
+        update_context("new.nested.value", "created")
+    """
+    # Initialize thread-local runtime context if needed
+    if not hasattr(_thread_local, 'runtime_context'):
+        _thread_local.runtime_context = {}
+    
+    keys = key_path.split('.')
+    current = _thread_local.runtime_context
+    
+    # Navigate to parent dict, creating nested dicts as needed
+    for key in keys[:-1]:
+        if key not in current:
+            current[key] = {}
+        current = current[key]
+    
+    # Set the final value
+    current[keys[-1]] = value
+    logger.debug(f"Runtime context updated: {key_path} = {value}")
+
+def clear_runtime_context() -> None:
+    """Clear runtime (thread-local) overrides for the current thread."""
+    if hasattr(_thread_local, 'runtime_context'):
+        _thread_local.runtime_context.clear()
+        logger.debug("Runtime context cleared for current thread")
 
 
 def substitute_context_variables(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Substitute ${} variables in parameters using context data.
     
+    Uses merged context: runtime context overrides file context.
     Performs recursive substitution on all string values in the params dictionary.
-    Only loads context file when substitution is actually needed (lazy loading).
     
     Args:
         params: Parameters dictionary to process
@@ -153,10 +239,9 @@ def substitute_context_variables(params: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary with context variables substituted
         
     Raises:
-        RuntimeError: If context file loading fails
         ValueError: If variable substitution fails
     """
-    if not _context_file_path:
+    if not _context_data:
         # No context set - return params as-is
         return params.copy()
     
@@ -165,17 +250,32 @@ def substitute_context_variables(params: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug("No ${} patterns found - skipping context substitution")
         return params.copy()
     
-    # Load context data (lazy loading)
-    try:
-        context_data = _load_context_data()
-    except RuntimeError as e:
-        raise RuntimeError(f"Context substitution failed: {e}")
+    # Merge contexts: file context + runtime overrides
+    merged_context = _context_data.copy()
     
-    # Perform substitution with circular dependency detection
+    if hasattr(_thread_local, 'runtime_context'):
+        _deep_merge(merged_context, _thread_local.runtime_context)
+    
+    # Perform substitution
     try:
-        return _substitute_recursive(params, context_data)
+        return _substitute_recursive(params, merged_context)
     except Exception as e:
         raise ValueError(f"Context variable substitution failed: {e}")
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
+    """
+    Deep merge override dict into base dict (in-place).
+    
+    Args:
+        base: Base dictionary to merge into
+        override: Override dictionary to merge from
+    """
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
 
 
 def _needs_substitution(obj: Any) -> bool:
@@ -248,12 +348,14 @@ def _substitute_string(text: str, context: Dict[str, Any]) -> Any:
         
         return _substitution_pattern.sub(replace_var, text)
 
+
 def _is_pure_variable_substitution(text: str) -> bool:
     """Check if string is exactly one variable like '${var.key}' with no other content."""
     if not isinstance(text, str):
         return False
     pattern = r'^\$\{([^}]+)\}$'
     return bool(re.match(pattern, text))
+
 
 def _get_context_value(var_path: str, context: Dict[str, Any]) -> Any:
     """
