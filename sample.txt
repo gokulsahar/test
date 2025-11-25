@@ -1,311 +1,176 @@
-. Required
+Just to be super crisp:
+
+Inner pipeline / job (run_job / whatever you call)
+
+Owns all business/data errors.
+
+If it knows how to handle them (reject table, logs, etc.), it should catch and NOT raise.
+
+From the consumer’s POV: if it returns, the message is “done” (even if job treated it as reject).
+
+Kafka consumer worker wrapper
+
+Calls your message_processor(ctx) (which calls run_job).
+
+If message_processor raises:
+
+That means the job did not handle it → treat as unexpected/system error.
+
+Common behavior in wrapper:
+
+Log error with topic/partition/offset.
+
+Call controller.request_stop() so main loop stops after this batch.
+
+Do not re-raise in a way that crashes the whole process (just mark internally).
+
+Main loop
+
+For each batch:
+
+Submit messages to pool.
+
+Wait for all tasks.
+
+If no unhandled errors in this batch → commit offsets.
+
+If any unhandled error → do NOT commit this batch, then exit loop (shutdown).
+
+On restart, Kafka will replay this last batch.
+
+So:
+
+All data/record-level error handling lives inside your job.
+Consumer only cares about truly unhandled exceptions and uses them as a reason to stop + not commit that batch.
+
+No failure handler. No per-message retries.
+
+2️⃣ Final param list (post-cleanup, no retries/failure_handler)
+Required
 
 connection
 
-Type: KafkaConnectionConfig (your existing type)
+KafkaConnectionConfig
 
-What: Holds broker/SSL/etc. info and builds the actual Kafka consumer.
-
-Use: Internally call something like connection.build_consumer(...).
+Builds the Kafka consumer.
 
 topics
 
-Type: list[str]
+list[str]
 
-What: Kafka topics to subscribe to.
+Topics to subscribe to.
 
 group_id
 
-Type: str
+str
 
-What: Consumer group ID used for offset tracking in Kafka.
+Consumer group ID for offsets.
 
 message_processor
 
-Type: Callable[[MessageContext], None] (or similar)
+Callable[[MessageContext], None]
 
-What: Your ETL logic for one message.
+Calls your job/pipeline with the message.
 
 Contract:
 
-Does the actual work (parse, transform, DB/API calls, etc.).
+Handles all expected errors internally.
 
-Raises an exception on failure (framework handles it).
+Only raises on truly unexpected/system issues.
 
-B. Optional (prod-ready, minimal)
+Optional
 
 worker_threads
 
-Type: int
+int, default e.g. 20
 
-Default: e.g. 20
+Size of thread pool.
 
-Meaning:
+Batch size = worker_threads (fixed).
 
-Max number of parallel worker threads.
-
-Max number of messages processed concurrently.
-
-Internal rule:
-
-Batch size = worker_threads (not exposed separately).
-
-Guarantee:
-
-At most worker_threads messages are polled and in-flight at any point.
+Max in-flight and parallel messages = worker_threads.
 
 auto_offset_reset
 
-Type: str — "latest" | "earliest"
+"latest" | "earliest", default "latest"
 
-Default: "latest"
-
-Meaning: Where to start if no committed offset exists for this group.
+Where to start if no committed offset for this group.
 
 additional_consumer_config
 
-Type: dict[str, Any]
+dict[str, Any], default {}
 
-Default: {}
-
-Meaning: Extra Kafka client config (security, tuning) if/when you’re allowed to use it.
+Extra Kafka client config (security, tuning) if you ever need it.
 
 poll_timeout_seconds
 
-Type: float
+float, default 1.0
 
-Default: 1.0
+How long consume() waits for up to worker_threads messages before returning.
 
-Meaning: How long to wait for up to worker_threads messages in each poll.
-
-max_retries_per_message
-
-Type: int
-
-Default: 0
-
-Meaning: Number of retries for a single message inside a worker thread (for transient errors).
-
-0 → one attempt only; >0 → retry that many times before marking failure.
-
-retry_backoff_ms
-
-Type: int
-
-Default: 1000 (1s)
-
-Meaning: Sleep between retries for one message.
-
-failure_handler
-
-Type: Optional[Callable[[MessageContext, Exception], None]]
-
-Default: None
-
-Meaning:
-
-Callback to send failed messages to a DLQ / failed_events table / file.
-
-Called after all retries for that message are exhausted.
-
-failure_mode
-
-Type: str
-
-Default: "capture_and_continue"
-
-Allowed: "capture_and_continue", "stop_on_error"
-
-Meaning:
-
-"capture_and_continue": on failure → call failure_handler, don’t fail the batch, continue and commit.
-
-"stop_on_error": on failure → call failure_handler, then trigger shutdown (no more polls).
+Controls responsiveness when topics are idle.
 
 controller
 
-Type: Optional[StreamController]
+Optional[StreamController], default None
 
-Default: None (create one internally)
+If provided: use it for shutdown signaling.
 
-Meaning: Graceful shutdown + signal handling (SIGINT/SIGTERM).
-
-If provided, use it; otherwise construct your own and call register_signal_handlers().
+If None: create one and register signal handlers.
 
 shutdown_max_wait_seconds
 
-Type: int
+int, default 60
 
-Default: 60
+After shutdown requested:
 
-Meaning:
+stop polling new batches,
 
-On shutdown: stop polling new batches, wait up to this many seconds for the current batch’s threads to finish.
+wait up to this long for current batch’s threads to finish,
 
-If exceeded, stop waiting; batch remains partially processed and will be replayed (at-least-once).
+if they don’t, exit without committing → Kafka replays that batch.
 
 log_summary_interval
 
-Type: int (number of messages)
+int, default 1000
 
-Default: 1000
+Every N processed messages, log a summary (success/fail, timings, etc.).
 
-Meaning:
-
-After every N processed messages, log a summary (processed/failed counts, avg times, etc.).
-
-<= 0 → disable periodic summary logging.
+<= 0 → disable.
 
 log_message_details
 
-Type: bool
+bool, default False
 
-Default: False
-
-Meaning:
-
-If True: log per-message metadata (topic/partition/offset…) — useful in dev.
-
-If False: only error logs + summaries.
+If True: log per-message metadata (topic/partition/offset) – dev/debug only.
 
 dev_mode
 
-Type: bool
+bool, default False
 
-Default: False
+If True: never commit offsets (so you can replay data for that group_id).
 
-Meaning:
+Use with a dev group_id only.
 
-If True: never commit offsets → you can replay data for this group.
+3️⃣ Behavior recap (short)
 
-Use with a dev-only group_id to avoid touching prod offsets.
+Per loop:
 
-2️⃣ New Design (Behaviour) — High-level
+consume(num_messages=worker_threads, timeout=poll_timeout_seconds)
 
-This is the design your framework should implement using those params.
+Build MessageContext for each msg.
 
-2.1 Core model
+Submit to thread pool (one task per message).
 
-One consumer loop thread, plus a ThreadPoolExecutor for parallel work.
+Wait for all futures:
 
-No custom queue between consumer and workers (v1).
+If no task reported “unhandled error” → commit batch (unless dev_mode).
 
-Batch size is fixed to worker_threads.
+If any task saw unhandled error → don’t commit, respect controller.request_stop() and exit.
 
-At any time:
+On restart, Kafka replays last uncommitted batch.
 
-Max messages polled and in-flight = worker_threads.
+All data-level error routing & retries = inside your job.
+Consumer just does: threads, polling, commits, shutdown.
 
-Max messages processed concurrently = worker_threads.
-
-This mirrors Talend’s “max parallel executions”, but without Talend’s hidden internal queue complexity.
-
-2.2 Message flow per loop iteration
-
-For each iteration of the main loop (while not controller.should_stop()):
-
-Poll from Kafka
-
-Call consume(num_messages=worker_threads, timeout=poll_timeout_seconds).
-
-This returns up to worker_threads messages (possibly fewer).
-
-Create a per-message context
-
-For each msg, build a MessageContext (your own class/dict) containing at least:
-
-topic
-
-partition
-
-offset
-
-key
-
-value
-
-timestamp
-
-maybe the raw Kafka record.
-
-Submit to thread pool
-
-Use a single shared ThreadPoolExecutor(max_workers=worker_threads).
-
-For each message, submit a wrapper function:
-
-Handles:
-
-retries (up to max_retries_per_message, with retry_backoff_ms delay),
-
-calls message_processor(ctx),
-
-catches final exceptions,
-
-calls failure_handler(ctx, exc) if configured,
-
-obeys failure_mode:
-
-"capture_and_continue" → swallow the exception (from Kafka’s POV this msg is “handled”).
-
-"stop_on_error" → signal shutdown via controller.
-
-Wait for batch to finish
-
-Collect futures for all submitted tasks for this batch.
-
-wait(futures, return_when=ALL_COMPLETED) — this is where the main thread blocks until:
-
-All messages succeed, or
-
-Failures are captured by failure_handler.
-
-👉 At this point, for this batch: nothing is “halfway” — each message is either processed or recorded as failed.
-
-Commit offsets (if not dev)
-
-If dev_mode == False:
-
-Call consumer.commit(asynchronous=False) once for this batch.
-
-Offsets are not committed until all messages in the batch are handled.
-
-Check shutdown & loop
-
-Check controller.should_stop() again:
-
-If False → go back to step 1 (poll next batch).
-
-If True → exit loop, close consumer, shutdown executor.
-
-
-
-2.5 Logging design (efficient)
-
-Create one shared logger per component / module:
-
-E.g. at module level: logger = logging.getLogger("kafka_consumer").
-
-Do not create a new logger inside message_processor or per message.
-
-Use:
-
-log_summary_interval
-
-Keep counters in memory (processed, failed, total time).
-
-Every N messages, log a single summary line.
-
-log_message_details
-
-If False: only log errors + summary, not every message.
-
-If True: for each message you may log basic metadata (topic/partition/offset), but avoid payload spam in prod.
-
-On failure:
-
-Log one error per failed message (unless too noisy), including:
-
-topic, partition, offset
-
-error type and message.
+If you’re okay with this, this is now a very clean contract you can bake into your framework.
