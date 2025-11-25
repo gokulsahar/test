@@ -1,596 +1,311 @@
-# 🎯 Prompt for Devin: Build Jira MCP Server for GitHub Copilot
-
-## Project Overview
-Create a complete Jira MCP (Model Context Protocol) server that integrates with GitHub Copilot. The server must enable AI-assisted Jira interactions including searching/querying issues and updating issue status. All organization-specific configurations must be in an external, easily editable configuration file at the top of the project.
-
-## Target Platform
-**GitHub Copilot** (not Claude Desktop) - ensure all setup instructions and configurations are for GitHub Copilot integration.
-
-## Technical Requirements
-
-### Technology Stack
-- **Language**: Python 3.10+
-- **MCP Framework**: `mcp` library
-- **HTTP Client**: `httpx` for async requests
-- **Configuration**: YAML file (must be at top of project, easily editable)
-- **API**: Jira REST API v3 (Cloud)
-- **Authentication**: Personal Access Token (PAT) with Bearer authentication
-
-### Project Structure
-```
-jira-mcp-server/
-├── config.yaml            # ⭐ CONFIGURATION FILE (user edits this - TOP PRIORITY)
-├── server.py              # Main MCP server
-├── jira_client.py         # Jira API wrapper
-├── config_loader.py       # Config file loader
-├── requirements.txt       # Python dependencies
-└── README.md             # Complete documentation
-```
-
----
-
-## CRITICAL REQUIREMENT: Configuration File (config.yaml)
-
-**ALL organization-specific settings MUST be in this external YAML file that users can easily edit.**
-
-### Required Configuration Structure
-
-```yaml
-# ============================================
-# JIRA MCP SERVER CONFIGURATION
-# EDIT THESE VALUES FOR YOUR ORGANIZATION
-# ============================================
-
-# YOUR JIRA INSTANCE (CHANGE THESE)
-jira:
-  # Your Jira Cloud URL (no trailing slash)
-  base_url: "https://yourcompany.atlassian.net"
-  
-  # Your Personal Access Token
-  # Get from: https://id.atlassian.com/manage-profile/security/api-tokens
-  pat_token: "YOUR_PAT_TOKEN_HERE"
-  
-  # API version (default: "3" for Jira Cloud)
-  api_version: "3"
-
-# API ENDPOINTS (customize if your org has custom endpoints)
-endpoints:
-  search: "/rest/api/{api_version}/search"
-  issue: "/rest/api/{api_version}/issue/{issue_key}"
-  transitions: "/rest/api/{api_version}/issue/{issue_key}/transitions"
-  user_search: "/rest/api/{api_version}/user/search"
-  myself: "/rest/api/{api_version}/myself"
-
-# REQUEST SETTINGS
-request:
-  timeout: 30              # Request timeout in seconds
-  max_retries: 3           # Maximum retry attempts
-  retry_delay: 1           # Delay between retries (seconds)
-
-# SEARCH DEFAULTS
-search:
-  default_max_results: 50
-  max_allowed_results: 100
-  default_fields:
-    - "summary"
-    - "status"
-    - "assignee"
-    - "priority"
-    - "issuetype"
-    - "created"
-    - "updated"
-    - "description"
-
-# ISSUE DETAILS SETTINGS
-issue_details:
-  max_comments: 5          # Number of recent comments to display
-  fields:
-    - "summary"
-    - "description"
-    - "status"
-    - "priority"
-    - "assignee"
-    - "reporter"
-    - "created"
-    - "updated"
-    - "duedate"
-    - "labels"
-    - "components"
-    - "subtasks"
-    - "comment"
-    - "issuetype"
-
-# LOGGING CONFIGURATION
-logging:
-  level: "INFO"           # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  mask_sensitive_data: true  # Mask PAT token in logs
-
-# YOUR ORGANIZATION INFO (optional, for display)
-organization:
-  name: "Your Company Name"
-  common_projects:
-    - "PROJ"
-    - "BUG"
-    - "TASK"
-
-# AUTHENTICATION HEADERS
-headers:
-  content_type: "application/json"
-  accept: "application/json"
-```
-
-**Key Points:**
-- This file MUST be at the root of the project
-- Users should NEVER need to edit Python code for configuration
-- All URLs, tokens, endpoints, and settings go here
-- Create a `config.example.yaml` as a template
-
----
-
-## Authentication Requirements
-
-### Personal Access Token (PAT) Authentication
-
-**Method**: Bearer Token in Authorization header
-
-```python
-headers = {
-    "Authorization": f"Bearer {pat_token}",
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-}
-```
-
-**Configuration Location**: `config.yaml` under `jira.pat_token`
-
-**Documentation Required**:
-Include in README how to get PAT token:
-1. Visit: https://id.atlassian.com/manage-profile/security/api-tokens
-2. Click "Create API token"
-3. Name it (e.g., "GitHub Copilot MCP")
-4. Copy token and paste into `config.yaml`
-
----
-
-## Core Features to Implement
-
-### Feature 1: Search Jira Issues
-
-**Tool Name**: `search_jira_issues`
-
-**Description**: Search Jira issues using JQL (Jira Query Language)
-
-**Input Schema**:
-```python
-{
-    "type": "object",
-    "properties": {
-        "jql": {
-            "type": "string",
-            "description": "JQL query string"
-        },
-        "max_results": {
-            "type": "integer",
-            "description": "Maximum results to return",
-            "default": 50  # from config
-        }
-    },
-    "required": ["jql"]
-}
-```
-
-**Jira API**: `GET /rest/api/3/search?jql={jql}&maxResults={max_results}`
-
-**Output Format** (human-readable):
-```
-Found {count} issues:
-
-• PROJ-123: Implement authentication
-  Status: In Progress | Priority: High | Assignee: John Doe
-  Created: 2024-01-15 10:30 AM
-
-• PROJ-124: Fix login bug
-  Status: Open | Priority: Critical | Assignee: Unassigned
-  Created: 2024-01-18 02:15 PM
-
-Total: 2 issues
-```
-
-**Common JQL Examples to Document**:
-- `assignee = currentUser() AND status = Open`
-- `project = PROJ AND priority = High`
-- `status IN ("To Do", "In Progress")`
-- `created >= -7d`
-
----
-
-### Feature 2: Get Issue Details
-
-**Tool Name**: `get_jira_issue`
-
-**Description**: Get detailed information about a specific issue
-
-**Input Schema**:
-```python
-{
-    "type": "object",
-    "properties": {
-        "issue_key": {
-            "type": "string",
-            "description": "Issue key (e.g., PROJ-123)"
-        }
-    },
-    "required": ["issue_key"]
-}
-```
-
-**Jira API**: `GET /rest/api/3/issue/{issue_key}`
-
-**Output Format**:
-```
-═══════════════════════════════════════
-Issue: PROJ-123
-═══════════════════════════════════════
-
-Summary: Implement user authentication
-Type: Story
-Status: In Progress
-Priority: High
-
-Assignee: John Doe (john@company.com)
-Reporter: Jane Smith (jane@company.com)
-
-Created: 2024-01-15 10:30 AM
-Updated: 2024-01-20 03:45 PM
-
-Description:
-────────────────────────────────────────
-Need to implement OAuth 2.0 authentication
-for the web application.
-────────────────────────────────────────
-
-Labels: backend, security
-
-Subtasks (2):
-  • PROJ-123-1: Setup OAuth [Done]
-  • PROJ-123-2: Add login UI [In Progress]
-
-Recent Comments (last 3):
-────────────────────────────────────────
-[2024-01-19] John: OAuth complete
-[2024-01-18] Jane: Please prioritize
-────────────────────────────────────────
-
-View: https://yourcompany.atlassian.net/browse/PROJ-123
-```
-
----
-
-### Feature 3: Update Issue Status
-
-**Tool Name**: `transition_jira_issue`
-
-**Description**: Change issue status (To Do → In Progress → Done)
-
-**Input Schema**:
-```python
-{
-    "type": "object",
-    "properties": {
-        "issue_key": {
-            "type": "string",
-            "description": "Issue key (e.g., PROJ-123)"
-        },
-        "status": {
-            "type": "string",
-            "description": "Target status name (case-insensitive)"
-        }
-    },
-    "required": ["issue_key", "status"]
-}
-```
-
-**Implementation Logic**:
-1. Get issue to show current status
-2. Get available transitions: `GET /rest/api/3/issue/{issue_key}/transitions`
-3. Find transition ID by matching status name (case-insensitive)
-4. Execute transition: `POST /rest/api/3/issue/{issue_key}/transitions`
-
-**Output Format**:
-```
-✓ Successfully transitioned PROJ-123
-  From: To Do
-  To: In Progress
-  View: https://yourcompany.atlassian.net/browse/PROJ-123
-```
-
-**Error Handling** (if invalid transition):
-```
-Cannot transition PROJ-123 to 'Testing'.
-
-Current status: To Do
-
-Available transitions:
-  • In Progress
-  • Blocked
-  • Won't Do
-
-Please use one of the available transitions.
-```
-
----
-
-## Implementation Details
-
-### File 1: config_loader.py
-
-Create a configuration loader class with:
-
-**Required Methods**:
-```python
-class ConfigLoader:
-    def __init__(self, config_path: str = "config.yaml")
-    def get(self, *keys, default=None)  # Get nested config values
-    def get_endpoint(self, endpoint_name: str, **kwargs) -> str  # Get formatted endpoint
-    def get_full_url(self, endpoint_name: str, **kwargs) -> str  # Get complete URL
-    def get_headers(self) -> Dict[str, str]  # Get auth headers
-    def mask_token(self, text: str) -> str  # Mask PAT in logs
-```
-
-**Validation**:
-- Check if `config.yaml` exists
-- Verify required fields are present
-- Ensure PAT token is not the placeholder "YOUR_PAT_TOKEN_HERE"
-- Give helpful error messages if configuration is invalid
-
----
-
-### File 2: jira_client.py
-
-Create Jira API client with:
-
-**Required Methods**:
-```python
-class JiraClient:
-    def __init__(self, config: ConfigLoader)
-    async def search_issues(self, jql: str, max_results: int) -> str
-    async def get_issue(self, issue_key: str) -> str
-    async def transition_issue(self, issue_key: str, target_status: str) -> str
-    async def _make_request(self, method: str, url: str, **kwargs) -> Dict
-    def _format_search_results(self, data: Dict) -> str
-    def _format_issue_details(self, data: Dict) -> str
-    def _extract_description(self, adf_content: Any) -> str  # Parse ADF format
-```
-
-**Key Requirements**:
-- Use Bearer token authentication from config
-- Implement retry logic (max_retries from config)
-- Handle Jira's Atlassian Document Format (ADF) for descriptions
-- Format dates to human-readable format
-- Comprehensive error handling
-
----
-
-### File 3: server.py
-
-Main MCP server implementing:
-
-**Required Functions**:
-```python
-@app.list_tools() -> list[Tool]  # List available tools
-@app.call_tool(name, arguments) -> Sequence[TextContent]  # Handle tool calls
-async def main()  # Main entry point
-```
-
-**Tool Definitions**:
-- search_jira_issues
-- get_jira_issue
-- transition_jira_issue
-
-**Startup**:
-- Load configuration
-- Validate configuration
-- Initialize Jira client
-- Log startup message with org name and URL
-
----
-
-### File 4: requirements.txt
-
-```
-mcp>=0.9.0
-httpx>=0.27.0
-pyyaml>=6.0.1
-```
-
----
-
-## GitHub Copilot Integration
-
-### Configuration File Location
-
-The MCP server configuration for GitHub Copilot varies by setup:
-
-**Option 1: GitHub Copilot CLI**
-Create: `~/.github-copilot/mcp-config.json` (Mac/Linux) or `%USERPROFILE%\.github-copilot\mcp-config.json` (Windows)
-
-**Option 2: VS Code with Copilot Extension**
-Add to `.vscode/settings.json` in your project
-
-**Option 3: Claude Desktop** (fallback if user has this)
-Add to Claude Desktop config
-
-### Configuration Format
-
-```json
-{
-  "mcpServers": {
-    "jira": {
-      "command": "python",
-      "args": ["/absolute/path/to/server.py"]
-    }
-  }
-}
-```
-
-**CRITICAL**: The path MUST be absolute (full path), not relative.
-
-### Include All Three Options in README
-
-Document all three integration methods so users can choose based on their setup.
-
----
-
-## Error Handling Requirements
-
-### Must Handle These Scenarios
-
-1. **Configuration Errors**:
-   - Missing `config.yaml` → "Configuration file not found. Please create config.yaml"
-   - Invalid PAT token placeholder → "Please set your PAT token in config.yaml"
-   - Missing required fields → "Missing required config: jira.base_url"
-
-2. **Authentication Errors**:
-   - 401 → "Authentication failed. Check your PAT token in config.yaml"
-   - 403 → "Permission denied. Verify token has required permissions"
-
-3. **API Errors**:
-   - 404 → "Resource not found: {resource}"
-   - Invalid JQL → "Invalid JQL query: {jql}. Error: {details}"
-   - Invalid issue key → "Invalid issue key format. Expected: PROJ-123"
-
-4. **Network Errors**:
-   - Connection timeout → Retry with delay from config
-   - Max retries exceeded → "Failed to connect to Jira: {error}"
-
-5. **Transition Errors**:
-   - Invalid status → Show available transitions
-   - Workflow error → "Workflow error: {details}"
-
----
-
-## Documentation Requirements (README.md)
-
-### Must Include
-
-1. **Quick Start** (top of README):
-   - Installation steps
-   - Configuration steps
-   - Testing steps
-
-2. **PAT Token Setup**:
-   - Step-by-step with screenshots/links
-   - How to get token
-   - Where to paste it
-
-3. **GitHub Copilot Configuration**:
-   - All three integration methods
-   - Exact file locations
-   - Example configurations
-   - How to find absolute path
-
-4. **Usage Examples**:
-   - Natural language prompts to try
-   - Common JQL queries
-   - Example conversations
-
-5. **Troubleshooting**:
-   - Common errors and solutions
-   - How to check logs
-   - How to test the server
-
-6. **Configuration Reference**:
-   - Explain each config option
-   - When to customize endpoints
-   - How to adjust defaults
-
----
-
-## Testing Checklist
-
-Before delivery, verify:
-
-### Configuration
-- ✅ `config.yaml` loads successfully
-- ✅ Validation catches missing required fields
-- ✅ Helpful error messages for invalid config
-- ✅ PAT token is masked in all logs
-
-### Search Issues
-- ✅ Can search with simple JQL: `project = PROJ`
-- ✅ Can search with complex JQL: `assignee = currentUser() AND status = Open`
-- ✅ Handles "No results found" gracefully
-- ✅ Handles invalid JQL syntax with helpful error
-
-### Get Issue
-- ✅ Can fetch issue details by key
-- ✅ Formats output nicely with all fields
-- ✅ Handles non-existent issues
-- ✅ Validates issue key format
-- ✅ Extracts text from ADF descriptions correctly
-
-### Transition Issue
-- ✅ Can change status successfully
-- ✅ Shows available transitions when invalid status provided
-- ✅ Case-insensitive status matching works
-- ✅ Shows before/after status
-
-### Authentication
-- ✅ PAT Bearer token authentication works
-- ✅ Clear error when token is invalid
-- ✅ Clear error when token is missing
-
-### GitHub Copilot Integration
-- ✅ Server runs via stdio transport
-- ✅ Configuration examples provided for all Copilot setups
-- ✅ Absolute path requirement documented
-
----
-
-## Deliverables
-
-1. **config.yaml** - Template configuration file (with placeholder values)
-2. **config_loader.py** - Configuration loader with validation
-3. **jira_client.py** - Jira API client with PAT auth
-4. **server.py** - Main MCP server
-5. **requirements.txt** - Python dependencies
-6. **README.md** - Complete documentation with:
-   - Quick start guide
-   - PAT token setup instructions
-   - GitHub Copilot integration (all methods)
-   - Usage examples
-   - Troubleshooting guide
-   - Configuration reference
-
----
-
-## Success Criteria
-
-The project is complete when:
-
-1. ✅ User can edit `config.yaml` to configure everything (no code editing needed)
-2. ✅ PAT token authentication works correctly
-3. ✅ Can search Jira issues with JQL
-4. ✅ Can get detailed issue information
-5. ✅ Can update issue status (transition)
-6. ✅ Integrates with GitHub Copilot (documentation for all methods)
-7. ✅ All errors handled with helpful messages
-8. ✅ README has complete setup instructions
-9. ✅ Code is clean, documented, and follows Python best practices
-10. ✅ Configuration validation prevents common mistakes
-
----
-
-## Key Priorities
-
-1. **Configuration First**: Make `config.yaml` the single source of truth
-2. **PAT Authentication**: Use Bearer token correctly
-3. **GitHub Copilot Integration**: Document all integration methods
-4. **User-Friendly**: No code editing required for configuration
-5. **Error Messages**: Helpful, actionable error messages
-6. **Documentation**: Complete setup guide for non-technical users
-
----
-
-**Build a production-ready Jira MCP server for GitHub Copilot with everything configurable via external YAML file.**
+. Required
+
+connection
+
+Type: KafkaConnectionConfig (your existing type)
+
+What: Holds broker/SSL/etc. info and builds the actual Kafka consumer.
+
+Use: Internally call something like connection.build_consumer(...).
+
+topics
+
+Type: list[str]
+
+What: Kafka topics to subscribe to.
+
+group_id
+
+Type: str
+
+What: Consumer group ID used for offset tracking in Kafka.
+
+message_processor
+
+Type: Callable[[MessageContext], None] (or similar)
+
+What: Your ETL logic for one message.
+
+Contract:
+
+Does the actual work (parse, transform, DB/API calls, etc.).
+
+Raises an exception on failure (framework handles it).
+
+B. Optional (prod-ready, minimal)
+
+worker_threads
+
+Type: int
+
+Default: e.g. 20
+
+Meaning:
+
+Max number of parallel worker threads.
+
+Max number of messages processed concurrently.
+
+Internal rule:
+
+Batch size = worker_threads (not exposed separately).
+
+Guarantee:
+
+At most worker_threads messages are polled and in-flight at any point.
+
+auto_offset_reset
+
+Type: str — "latest" | "earliest"
+
+Default: "latest"
+
+Meaning: Where to start if no committed offset exists for this group.
+
+additional_consumer_config
+
+Type: dict[str, Any]
+
+Default: {}
+
+Meaning: Extra Kafka client config (security, tuning) if/when you’re allowed to use it.
+
+poll_timeout_seconds
+
+Type: float
+
+Default: 1.0
+
+Meaning: How long to wait for up to worker_threads messages in each poll.
+
+max_retries_per_message
+
+Type: int
+
+Default: 0
+
+Meaning: Number of retries for a single message inside a worker thread (for transient errors).
+
+0 → one attempt only; >0 → retry that many times before marking failure.
+
+retry_backoff_ms
+
+Type: int
+
+Default: 1000 (1s)
+
+Meaning: Sleep between retries for one message.
+
+failure_handler
+
+Type: Optional[Callable[[MessageContext, Exception], None]]
+
+Default: None
+
+Meaning:
+
+Callback to send failed messages to a DLQ / failed_events table / file.
+
+Called after all retries for that message are exhausted.
+
+failure_mode
+
+Type: str
+
+Default: "capture_and_continue"
+
+Allowed: "capture_and_continue", "stop_on_error"
+
+Meaning:
+
+"capture_and_continue": on failure → call failure_handler, don’t fail the batch, continue and commit.
+
+"stop_on_error": on failure → call failure_handler, then trigger shutdown (no more polls).
+
+controller
+
+Type: Optional[StreamController]
+
+Default: None (create one internally)
+
+Meaning: Graceful shutdown + signal handling (SIGINT/SIGTERM).
+
+If provided, use it; otherwise construct your own and call register_signal_handlers().
+
+shutdown_max_wait_seconds
+
+Type: int
+
+Default: 60
+
+Meaning:
+
+On shutdown: stop polling new batches, wait up to this many seconds for the current batch’s threads to finish.
+
+If exceeded, stop waiting; batch remains partially processed and will be replayed (at-least-once).
+
+log_summary_interval
+
+Type: int (number of messages)
+
+Default: 1000
+
+Meaning:
+
+After every N processed messages, log a summary (processed/failed counts, avg times, etc.).
+
+<= 0 → disable periodic summary logging.
+
+log_message_details
+
+Type: bool
+
+Default: False
+
+Meaning:
+
+If True: log per-message metadata (topic/partition/offset…) — useful in dev.
+
+If False: only error logs + summaries.
+
+dev_mode
+
+Type: bool
+
+Default: False
+
+Meaning:
+
+If True: never commit offsets → you can replay data for this group.
+
+Use with a dev-only group_id to avoid touching prod offsets.
+
+2️⃣ New Design (Behaviour) — High-level
+
+This is the design your framework should implement using those params.
+
+2.1 Core model
+
+One consumer loop thread, plus a ThreadPoolExecutor for parallel work.
+
+No custom queue between consumer and workers (v1).
+
+Batch size is fixed to worker_threads.
+
+At any time:
+
+Max messages polled and in-flight = worker_threads.
+
+Max messages processed concurrently = worker_threads.
+
+This mirrors Talend’s “max parallel executions”, but without Talend’s hidden internal queue complexity.
+
+2.2 Message flow per loop iteration
+
+For each iteration of the main loop (while not controller.should_stop()):
+
+Poll from Kafka
+
+Call consume(num_messages=worker_threads, timeout=poll_timeout_seconds).
+
+This returns up to worker_threads messages (possibly fewer).
+
+Create a per-message context
+
+For each msg, build a MessageContext (your own class/dict) containing at least:
+
+topic
+
+partition
+
+offset
+
+key
+
+value
+
+timestamp
+
+maybe the raw Kafka record.
+
+Submit to thread pool
+
+Use a single shared ThreadPoolExecutor(max_workers=worker_threads).
+
+For each message, submit a wrapper function:
+
+Handles:
+
+retries (up to max_retries_per_message, with retry_backoff_ms delay),
+
+calls message_processor(ctx),
+
+catches final exceptions,
+
+calls failure_handler(ctx, exc) if configured,
+
+obeys failure_mode:
+
+"capture_and_continue" → swallow the exception (from Kafka’s POV this msg is “handled”).
+
+"stop_on_error" → signal shutdown via controller.
+
+Wait for batch to finish
+
+Collect futures for all submitted tasks for this batch.
+
+wait(futures, return_when=ALL_COMPLETED) — this is where the main thread blocks until:
+
+All messages succeed, or
+
+Failures are captured by failure_handler.
+
+👉 At this point, for this batch: nothing is “halfway” — each message is either processed or recorded as failed.
+
+Commit offsets (if not dev)
+
+If dev_mode == False:
+
+Call consumer.commit(asynchronous=False) once for this batch.
+
+Offsets are not committed until all messages in the batch are handled.
+
+Check shutdown & loop
+
+Check controller.should_stop() again:
+
+If False → go back to step 1 (poll next batch).
+
+If True → exit loop, close consumer, shutdown executor.
+
+
+
+2.5 Logging design (efficient)
+
+Create one shared logger per component / module:
+
+E.g. at module level: logger = logging.getLogger("kafka_consumer").
+
+Do not create a new logger inside message_processor or per message.
+
+Use:
+
+log_summary_interval
+
+Keep counters in memory (processed, failed, total time).
+
+Every N messages, log a single summary line.
+
+log_message_details
+
+If False: only log errors + summary, not every message.
+
+If True: for each message you may log basic metadata (topic/partition/offset), but avoid payload spam in prod.
+
+On failure:
+
+Log one error per failed message (unless too noisy), including:
+
+topic, partition, offset
+
+error type and message.
