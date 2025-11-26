@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | **Mod Type** | `kafka_consumer` |
-| **Version** | 1.0.0 |
+| **Version** | 1.1.0 |
 | **Framework** | DataPy |
 | **Consistency Model** | AP (Availability Priority) |
 | **Delivery Guarantee** | At-least-once |
@@ -51,6 +51,8 @@ The `kafka_consumer` mod is a production-ready, high-throughput Kafka consumer d
 | **Graceful Shutdown** | Clean shutdown with configurable timeout |
 | **Pluggable Processing** | User provides callable for message processing |
 | **Comprehensive Logging** | Detailed logs via framework's logger.py |
+| **Dev Mode** | No commits for testing/development scenarios |
+| **Controlled Processing** | Stop after specific offset for testing |
 
 ### 1.3 Design Philosophy
 
@@ -84,7 +86,7 @@ Main Thread (Orchestrator)
     ├─── Commit Thread
     │    ├── Track processed
     │    ├── Calc max contiguous
-    │    └── Commit every 5s
+    │    └── Commit every 5s (if dev_mode=False)
     │
     ├─── Processing Queue (200 messages)
     │
@@ -197,11 +199,13 @@ def main():
 - Write to backup CSV queue (if enabled)
 - Put messages in processing queue
 - Handle backpressure (queue full)
+- Check stop_at_offset condition (if configured)
 
 **Configuration:**
 - `poll_timeout_ms`: Kafka poll timeout (default: 1000ms)
 - `max_poll_records`: Batch size (default: 100)
 - `queue_size`: Processing queue capacity (default: 200)
+- `stop_at_offset`: Stop consuming after this offset per partition (default: None)
 
 **Pseudo-logic:**
 ```python
@@ -223,6 +227,23 @@ def poll_messages():
             logger.debug(f"Polled batch", extra={"batch_size": batch_size})
             
             for msg in messages:
+                # Check if stop_at_offset configured and reached
+                if config.stop_at_offset:
+                    partition_key = (msg.topic, msg.partition)
+                    target_offset = config.stop_at_offset.get(partition_key)
+                    
+                    if target_offset is not None and msg.offset >= target_offset:
+                        logger.info(f"Reached stop_at_offset", extra={
+                            "topic": msg.topic,
+                            "partition": msg.partition,
+                            "offset": msg.offset,
+                            "target_offset": target_offset
+                        })
+                        # Trigger graceful shutdown
+                        running = False
+                        shutdown_event.set()
+                        break
+                
                 # Write to backup CSV queue (async, non-blocking)
                 if config.backup_enabled:
                     try:
@@ -270,6 +291,11 @@ def poll_messages():
    - Never blocks polling on CSV backup
    - If backup queue full, log warning and continue
    - Processing priority > backup priority
+
+4. **Stop at Offset:** Optional controlled stop
+   - Useful for testing/development
+   - Per-partition offset targets
+   - Triggers graceful shutdown when reached
 
 ---
 
@@ -422,15 +448,21 @@ def worker_wrapper(worker_id):
 - Calculate max contiguous offset per partition
 - Commit offsets to Kafka at configured interval
 - Handle commit failures
+- Skip commits if dev_mode enabled
 
 **Configuration:**
 - `commit_interval_seconds`: How often to commit (default: 5)
 - `enable_auto_commit`: Use Kafka's auto-commit (default: False)
+- `dev_mode`: Disable offset commits for testing (default: False)
 
 **Pseudo-logic:**
 ```python
 def commit_offsets():
     logger = setup_logger(__name__, mod_type="kafka_consumer", mod_name="commit")
+    
+    # Check if dev_mode enabled
+    if config.dev_mode:
+        logger.warning("Dev mode enabled - offsets will NOT be committed")
     
     # Track processed offsets per partition
     processed_offsets = {}  # {partition: set([offsets])}
@@ -455,6 +487,17 @@ def commit_offsets():
                 # No more processed messages yet
                 time.sleep(0.1)
                 continue
+        
+        # If dev_mode, skip actual commit but log what would be committed
+        if config.dev_mode:
+            if processed_offsets:
+                logger.info("Dev mode - would have committed offsets", extra={
+                    "partition_offsets": {p: max(offsets) for p, offsets in processed_offsets.items()},
+                    "messages_processed": drained_count
+                })
+                # Clear tracking (simulate commit)
+                processed_offsets.clear()
+            continue
         
         # Calculate max contiguous offset per partition
         offsets_to_commit = {}
@@ -560,6 +603,12 @@ def find_max_contiguous(offsets: Set[int], last_committed: int) -> int:
 3. **Commit Failure Handling:** If commit fails, log and retry next interval
    - Don't crash consumer
    - Kafka will redeliver from last successful commit
+
+4. **Dev Mode:** Completely skip commits when enabled
+   - Useful for development/testing
+   - Messages still processed
+   - On restart, all messages reprocessed
+   - Logs what would have been committed
 
 ---
 
@@ -819,10 +868,10 @@ STEP 4: Commit Thread
     |
     ├─→ Calculate max contiguous offset
     |
-    └─→ Commit to Kafka
+    └─→ Commit to Kafka (if dev_mode=False)
         |
         v
-STEP 5: Offset Committed ✅
+STEP 5: Offset Committed ✅ (or skipped in dev_mode)
 ```
 
 ### 4.2 Failure Path (Processing Error)
@@ -860,10 +909,11 @@ STEP 4: Commit Thread
     |
     ├─→ Calculate max contiguous offset
     |
-    └─→ Commit to Kafka
+    └─→ Commit to Kafka (if dev_mode=False)
         |
         v
 STEP 5: Offset Committed ✅ (even though failed, it's handled via DLQ)
+       (or skipped in dev_mode)
 ```
 
 ### 4.3 Crash Recovery Flow
@@ -876,16 +926,23 @@ BEFORE CRASH:
 ├─ Processed offsets 1-50 (success)
 ├─ Processing offsets 51-70 (in-flight)
 ├─ Queue offsets 71-100 (not started)
-├─ Last committed offset: 50
+├─ Last committed offset: 50 (if dev_mode=False)
 └─ CRASH! 💥
 
-AFTER RESTART:
+AFTER RESTART (Production Mode):
 ├─ Consumer starts
 ├─ Reads committed offset from Kafka: 50
 ├─ Kafka redelivers offsets 51-100
 ├─ Some duplicates (51-70 might have partially processed)
 ├─ At-least-once guarantee ✅
 └─ No messages lost ✅
+
+AFTER RESTART (Dev Mode):
+├─ Consumer starts
+├─ No commits were made (dev_mode=True)
+├─ Kafka redelivers ALL messages from beginning or last manual commit
+├─ All messages reprocessed
+└─ Expected behavior for testing ✅
 ```
 
 ---
@@ -896,11 +953,12 @@ AFTER RESTART:
 
 | Aspect | Strategy |
 |--------|----------|
-| **When to commit** | Every N seconds (time-based) |
+| **When to commit** | Every N seconds (time-based), unless dev_mode=True |
 | **What to commit** | Max contiguous processed offset per partition |
 | **Failure handling** | Mark as processed (via DLQ), commit anyway |
 | **Gap handling** | Commit up to first gap, rest uncommitted |
 | **Crash recovery** | Replay from last committed offset |
+| **Dev mode** | No commits - all messages reprocessed on restart |
 
 ### 5.2 Max Contiguous Algorithm (Detailed)
 
@@ -996,8 +1054,9 @@ t=10s: COMMIT TIME
 | **5 seconds** | ✅ **Balanced (recommended)** | Some reprocessing (5s worth) |
 | **10 seconds** | Fewer API calls, less overhead | More reprocessing on crash |
 | **30+ seconds** | Minimal overhead | Significant reprocessing, not recommended |
+| **Dev mode (disabled)** | Complete reprocessing control | All messages reprocessed on restart |
 
-**Recommendation:** 5 seconds (industry standard)
+**Recommendation:** 5 seconds (industry standard), dev_mode for testing
 
 ---
 
@@ -1239,13 +1298,14 @@ def reprocess_dlq(dlq_path, processor_callable, max_retries=3):
 - `SIGTERM` (Kubernetes pod termination)
 - `SIGINT` (Ctrl+C)
 - User calls `consumer.stop()`
+- Reached `stop_at_offset` (if configured)
 
 ### 8.2 Shutdown Sequence
 
 **GRACEFUL SHUTDOWN SEQUENCE (30 seconds timeout):**
 
 ```
-STEP 1: Signal Received (SIGTERM/SIGINT)
+STEP 1: Signal Received (SIGTERM/SIGINT) or stop_at_offset reached
     |
     v
 STEP 2: Set running = False (all threads check this)
@@ -1271,7 +1331,7 @@ STEP 5: Wait for Workers
 STEP 6: Final Commit
     - Drain processed_queue
     - Calculate final offsets
-    - Commit to Kafka
+    - Commit to Kafka (if dev_mode=False)
     Timeout: 5 seconds
     |
     v
@@ -1303,12 +1363,12 @@ t=0s:  SIGTERM received
 t=1s:  Polling stopped
 t=5s:  Queue drained (50 messages processed)
 t=6s:  All workers idle
-t=7s:  Final commit (50 offsets)
+t=7s:  Final commit (50 offsets) - skipped if dev_mode=True
 t=8s:  CSV writers flushed
 t=9s:  Exit ✅
 
 Messages in flight: 0
-Reprocessed on restart: 0
+Reprocessed on restart: 0 (or all if dev_mode=True)
 ```
 
 **Scenario 2: Timeout Exceeded (> 30s)**
@@ -1316,13 +1376,25 @@ Reprocessed on restart: 0
 t=0s:  SIGTERM received
 t=1s:  Polling stopped
 t=30s: TIMEOUT! (100 messages still in queue, 20 being processed)
-t=31s: Force commit processed so far (50 messages)
+t=31s: Force commit processed so far (50 messages) - skipped if dev_mode=True
 t=32s: Force flush CSV writers
 t=33s: Force exit
 
 Messages in flight: 20 (not committed)
 Messages in queue: 100 (not processed)
-Reprocessed on restart: 120 (at-least-once)
+Reprocessed on restart: 120 (at-least-once) or all if dev_mode=True
+```
+
+**Scenario 3: Stop at Offset Reached**
+```
+t=0s:  Polling, offset 1000 reached (stop_at_offset configured)
+t=1s:  Polling thread triggers shutdown
+t=2s:  Queue has 50 remaining messages
+t=10s: All 50 processed
+t=11s: Final commit (if dev_mode=False)
+t=12s: Exit ✅
+
+Result: Controlled stop at exact offset for testing
 ```
 
 ### 8.4 Shutdown Logging
@@ -1332,7 +1404,8 @@ Reprocessed on restart: 120 (at-least-once)
 logger.info("Shutdown initiated", extra={
     "signal": "SIGTERM",
     "queue_depth": processing_queue.qsize(),
-    "active_workers": count_active_workers()
+    "active_workers": count_active_workers(),
+    "reason": "signal" or "stop_at_offset"
 })
 
 # Polling stopped
@@ -1349,10 +1422,15 @@ logger.info("All workers stopped", extra={
 })
 
 # Final commit
-logger.info("Final commit", extra={
-    "partition_offsets": final_offsets,
-    "messages_committed": count
-})
+if not config.dev_mode:
+    logger.info("Final commit", extra={
+        "partition_offsets": final_offsets,
+        "messages_committed": count
+    })
+else:
+    logger.info("Dev mode - final commit skipped", extra={
+        "messages_processed": count
+    })
 
 # Shutdown complete
 logger.info("Shutdown complete", extra={
@@ -1486,6 +1564,7 @@ def commit_thread():
 |-----------|------|---------|-------------|
 | `commit_interval_seconds` | int | `5` | How often to commit offsets |
 | `commit_on_shutdown` | bool | `True` | Commit during graceful shutdown |
+| `dev_mode` | bool | `False` | **NEW:** Disable offset commits for testing/development |
 
 ---
 
@@ -1509,12 +1588,13 @@ def commit_thread():
 
 ---
 
-#### **OPTIONAL PARAMETERS - SHUTDOWN**
+#### **OPTIONAL PARAMETERS - SHUTDOWN & CONTROL**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `shutdown_timeout_seconds` | int | `30` | Max time for graceful shutdown |
 | `shutdown_drain_queue` | bool | `True` | Wait for queue to drain on shutdown |
+| `stop_at_offset` | dict | `None` | **NEW:** Stop after reaching offsets: `{("topic", partition): offset}` |
 
 ---
 
@@ -1564,6 +1644,7 @@ result = run_mod("kafka_consumer", {
     
     # Commit settings
     "commit_interval_seconds": 5,
+    "dev_mode": False,  # Production mode - commits enabled
     
     # CSV backup
     "backup_enabled": True,
@@ -1581,7 +1662,45 @@ result = run_mod("kafka_consumer", {
 })
 ```
 
-#### **Example 3: High-Throughput Configuration**
+#### **Example 3: Development/Testing Configuration**
+
+```python
+result = run_mod("kafka_consumer", {
+    # Required
+    "bootstrap_servers": "localhost:9092",
+    "topics": ["orders-test"],
+    "group_id": "test-consumer",
+    "processor_callable": test_processor,
+    
+    # Dev mode - no commits
+    "dev_mode": True,  # Messages will be reprocessed on restart
+    
+    # Stop after processing first 100 messages
+    "stop_at_offset": {
+        ("orders-test", 0): 100,  # Stop at offset 100 for partition 0
+        ("orders-test", 1): 50,   # Stop at offset 50 for partition 1
+    },
+    
+    # Smaller configuration for testing
+    "worker_count": 5,
+    "queue_size": 20,
+    
+    # Keep backup for inspection
+    "backup_enabled": True,
+    "backup_path": "/tmp/test_backup.csv",
+    
+    # DLQ for test failures
+    "dlq_path": "/tmp/test_dlq.csv",
+    
+    # Quick shutdown
+    "shutdown_timeout_seconds": 10,
+    
+    # Verbose logging
+    "log_level": "DEBUG"
+})
+```
+
+#### **Example 4: High-Throughput Configuration**
 
 ```python
 result = run_mod("kafka_consumer", {
@@ -1602,11 +1721,14 @@ result = run_mod("kafka_consumer", {
     
     # Larger timeouts
     "processing_timeout": None,  # No timeout
-    "shutdown_timeout_seconds": 120
+    "shutdown_timeout_seconds": 120,
+    
+    # Production mode
+    "dev_mode": False
 })
 ```
 
-#### **Example 4: Low-Latency Configuration**
+#### **Example 5: Low-Latency Configuration**
 
 ```python
 result = run_mod("kafka_consumer", {
@@ -1624,7 +1746,10 @@ result = run_mod("kafka_consumer", {
     
     # CSV settings
     "csv_flush_interval_seconds": 1,  # Frequent flushes
-    "csv_batch_size": 100
+    "csv_batch_size": 100,
+    
+    # Production mode
+    "dev_mode": False
 })
 ```
 
@@ -1658,6 +1783,20 @@ def validate_config(config):
     if "commit_interval_seconds" in config:
         assert config["commit_interval_seconds"] >= 1, "commit_interval must be >= 1"
     
+    # Dev mode validation
+    if config.get("dev_mode", False):
+        logger.warning("Dev mode enabled - offsets will NOT be committed. "
+                      "All messages will be reprocessed on restart.")
+    
+    # Stop at offset validation
+    if "stop_at_offset" in config and config["stop_at_offset"] is not None:
+        assert isinstance(config["stop_at_offset"], dict), "stop_at_offset must be dict"
+        for key, offset in config["stop_at_offset"].items():
+            assert isinstance(key, tuple) and len(key) == 2, \
+                "stop_at_offset keys must be (topic, partition) tuples"
+            assert isinstance(offset, int) and offset >= 0, \
+                "stop_at_offset values must be non-negative integers"
+    
     # File path checks
     if config.get("backup_enabled", True):
         if "backup_path" not in config:
@@ -1687,7 +1826,7 @@ def validate_config(config):
 |-------|-------|----------|
 | **DEBUG** | Detailed flow, polling details | "Polled batch of 100 messages" |
 | **INFO** | Important events, milestones | "Committed offsets", "Worker started" |
-| **WARNING** | Recoverable issues | "Queue full, backpressure applied" |
+| **WARNING** | Recoverable issues | "Queue full, backpressure applied", "Dev mode enabled" |
 | **ERROR** | Processing failures, retryable errors | "Message processing failed" |
 | **CRITICAL** | System failures, fatal errors | "Worker crashed permanently" |
 
@@ -1700,8 +1839,18 @@ logger.info("Kafka consumer starting", extra={
     "bootstrap_servers": config.bootstrap_servers,
     "topics": config.topics,
     "group_id": config.group_id,
-    "worker_count": config.worker_count
+    "worker_count": config.worker_count,
+    "dev_mode": config.dev_mode,
+    "stop_at_offset": config.stop_at_offset
 })
+
+if config.dev_mode:
+    logger.warning("Dev mode enabled - offsets will NOT be committed")
+
+if config.stop_at_offset:
+    logger.info("Stop at offset configured", extra={
+        "targets": config.stop_at_offset
+    })
 
 logger.info("All components started", extra={
     "total_threads": thread_count
@@ -1718,6 +1867,15 @@ logger.debug("Batch polled", extra={
     "offset_range": f"{min_offset}-{max_offset}",
     "poll_time_ms": poll_duration * 1000
 })
+
+# Stop at offset reached
+if stop_at_offset_reached:
+    logger.info("Stop at offset reached, triggering shutdown", extra={
+        "topic": msg.topic,
+        "partition": msg.partition,
+        "offset": msg.offset,
+        "target_offset": target_offset
+    })
 
 # Backpressure
 logger.warning("Processing queue full, backpressure applied", extra={
@@ -1752,12 +1910,19 @@ logger.error("Message processing failed", extra={
 #### **Commit Logs**
 
 ```python
-# Successful commit
-logger.info("Offsets committed", extra={
-    "partition_offsets": {p: o for p, o in partition_offsets.items()},
-    "messages_committed": count,
-    "commit_time_ms": commit_duration * 1000
-})
+# Successful commit (production mode)
+if not config.dev_mode:
+    logger.info("Offsets committed", extra={
+        "partition_offsets": {p: o for p, o in partition_offsets.items()},
+        "messages_committed": count,
+        "commit_time_ms": commit_duration * 1000
+    })
+else:
+    # Dev mode
+    logger.info("Dev mode - would have committed offsets", extra={
+        "partition_offsets": {p: o for p, o in partition_offsets.items()},
+        "messages_processed": count
+    })
 
 # Gap warning
 logger.warning("Gap in processed offsets", extra={
@@ -1791,13 +1956,15 @@ logger.info("DLQ CSV batch written", extra={
 logger.info("Shutdown initiated", extra={
     "signal": signal_name,
     "queue_depth": processing_queue.qsize(),
-    "active_workers": active_count
+    "active_workers": active_count,
+    "reason": "signal" or "stop_at_offset" or "error"
 })
 
 logger.info("Shutdown complete", extra={
     "total_duration_ms": total_duration * 1000,
-    "messages_committed": final_commit_count,
-    "clean_shutdown": not timeout_exceeded
+    "messages_committed": final_commit_count if not config.dev_mode else "skipped",
+    "clean_shutdown": not timeout_exceeded,
+    "dev_mode": config.dev_mode
 })
 ```
 
@@ -1835,6 +2002,11 @@ grep "Message processing failed" consumer.log | \
   sort | uniq -c | sort -rn
 ```
 
+**Query 5: Check if running in dev mode**
+```bash
+grep "Dev mode enabled" consumer.log
+```
+
 ---
 
 ## 12. PERFORMANCE & THROUGHPUT
@@ -1861,6 +2033,8 @@ Throughput (msg/s) = Worker Count / Avg Processing Time (s)
 | CSV writes | 10-100ms per batch | ❌ NO (async) |
 
 **Conclusion:** Processing time is the bottleneck
+
+**Note:** Dev mode has zero commit overhead but doesn't improve throughput
 
 ### 12.3 Optimization Strategies
 
@@ -1945,6 +2119,8 @@ def process_message(msg):
 - Kafka consumer: ~1000 msg/s capacity (not bottleneck)
 - **Processing is always the limit**
 
+**Dev Mode Impact:** No performance difference (commits are async and infrequent)
+
 ---
 
 ### 12.5 Memory Usage Estimation
@@ -1984,6 +2160,8 @@ Recommendation: Allocate 1GB for safety
    - Invalid types
    - Out of range values
    - Invalid file paths
+   - Dev mode flag
+   - Stop at offset format
 
 3. **Message Size Validation**
    - Normal size
@@ -1996,6 +2174,11 @@ Recommendation: Allocate 1GB for safety
    - Null key
    - Large payload
 
+5. **Stop at Offset Logic**
+   - Single partition stop
+   - Multi-partition stop
+   - Offset boundary conditions
+
 ---
 
 ### 13.2 Integration Tests
@@ -2006,13 +2189,13 @@ Recommendation: Allocate 1GB for safety
    - Start consumer
    - Produce 100 messages
    - Verify all processed
-   - Verify offsets committed
+   - Verify offsets committed (if not dev mode)
    - Verify backup CSV written
 
 2. **Processing Failures**
    - Produce 100 messages (50 valid, 50 invalid)
    - Verify 50 succeed, 50 go to DLQ
-   - Verify all offsets committed
+   - Verify all offsets committed (if not dev mode)
    - Verify DLQ CSV has 50 entries
 
 3. **Backpressure**
@@ -2026,7 +2209,7 @@ Recommendation: Allocate 1GB for safety
    - Process 50 messages
    - Send SIGTERM
    - Verify queue drains
-   - Verify final commit
+   - Verify final commit (if not dev mode)
    - Verify clean exit
 
 5. **Timeout Shutdown**
@@ -2036,7 +2219,21 @@ Recommendation: Allocate 1GB for safety
    - Send SIGTERM
    - Wait 30s (timeout)
    - Verify forced shutdown
-   - Verify partial commit
+   - Verify partial commit (if not dev mode)
+
+6. **Dev Mode Test**
+   - Start consumer with dev_mode=True
+   - Process 100 messages
+   - Verify no commits made
+   - Restart consumer
+   - Verify all 100 messages reprocessed
+
+7. **Stop at Offset Test**
+   - Configure stop_at_offset={("topic", 0): 50}
+   - Start consumer
+   - Verify stops after offset 50
+   - Verify messages up to 50 processed
+   - Verify graceful shutdown triggered
 
 ---
 
@@ -2074,6 +2271,13 @@ Recommendation: Allocate 1GB for safety
    - Huge messages (>100MB)
    - Verify message rejected
    - Verify consumer continues
+
+6. **Dev Mode Restart Test**
+   - Start with dev_mode=True
+   - Process 50 messages
+   - Crash consumer
+   - Restart
+   - Verify all 50 reprocessed (no commits were made)
 
 ---
 
@@ -2171,6 +2375,45 @@ Recommendation: Allocate 1GB for safety
 
 ---
 
+### 14.6 Runbook: Dev Mode Running in Production
+
+**Symptoms:**
+- Messages being reprocessed on every restart
+- No offset commits in logs
+- Log shows "Dev mode enabled" warning
+
+**Diagnosis:**
+1. Check configuration: `dev_mode` parameter
+2. Verify environment (dev vs prod)
+
+**Resolution:**
+1. IMMEDIATE: Stop consumer
+2. Change config: Set `dev_mode=False`
+3. Restart consumer
+4. Verify commits are happening
+5. Review why dev config was used in production
+
+---
+
+### 14.7 Runbook: Stop at Offset Not Triggering
+
+**Symptoms:**
+- Consumer configured with stop_at_offset
+- Consumer continues past target offset
+
+**Diagnosis:**
+1. Check stop_at_offset configuration format
+2. Verify (topic, partition) tuple matches actual topic/partition
+3. Check if offset target already passed
+
+**Resolution:**
+1. Verify configuration: `stop_at_offset={("topic", partition): offset}`
+2. Check current consumer position
+3. If target already passed, consumer will not stop
+4. Restart consumer with new target offset if needed
+
+---
+
 ## 15. COMPLETE PARAMETER REFERENCE
 
 ### Quick Reference Table
@@ -2188,12 +2431,52 @@ Recommendation: Allocate 1GB for safety
 | `max_message_size` | ❌ | 10485760 | 1024 | 1GB | int |
 | `processing_timeout` | ❌ | None | 1 | 3600 | int/None |
 | `commit_interval_seconds` | ❌ | 5 | 1 | 300 | int |
+| `dev_mode` | ❌ | **False** | - | - | bool |
 | `backup_enabled` | ❌ | True | - | - | bool |
 | `backup_path` | Conditional | "kafka_backup.csv" | - | - | string |
 | `dlq_path` | ❌ | "kafka_dlq.csv" | - | - | string |
 | `csv_flush_interval_seconds` | ❌ | 5 | 1 | 300 | int |
 | `shutdown_timeout_seconds` | ❌ | 30 | 5 | 300 | int |
+| `stop_at_offset` | ❌ | **None** | - | - | dict |
 | `log_level` | ❌ | "INFO" | - | - | enum |
+
+---
+
+### New Parameters Detail
+
+#### **dev_mode**
+- **Type:** bool
+- **Default:** False
+- **Description:** When True, disables offset commits. Messages will be reprocessed on every restart. Useful for development and testing.
+- **Use Cases:**
+  - Testing message processing logic
+  - Debugging without affecting committed offsets
+  - Development environments
+  - Idempotency testing
+- **Warning:** Never use in production - will cause infinite reprocessing
+
+#### **stop_at_offset**
+- **Type:** dict or None
+- **Default:** None
+- **Format:** `{(topic, partition): offset, ...}`
+- **Description:** Stop consuming when reaching specified offsets for each partition. Triggers graceful shutdown.
+- **Example:**
+  ```python
+  {
+      ("orders", 0): 1000,  # Stop at offset 1000 for orders partition 0
+      ("orders", 1): 500,   # Stop at offset 500 for orders partition 1
+  }
+  ```
+- **Use Cases:**
+  - Testing with specific data ranges
+  - Controlled processing for data migration
+  - Debugging specific offset ranges
+  - Integration testing with known datasets
+- **Behavior:**
+  - Consumer stops when ANY configured offset is reached
+  - Graceful shutdown is triggered
+  - All in-flight messages are processed
+  - Final commit performed (if not dev_mode)
 
 ---
 
@@ -2201,7 +2484,16 @@ Recommendation: Allocate 1GB for safety
 
 ---
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0  
 **Last Updated:** 2024-11-27  
 **Status:** Ready for Implementation  
-**Next Steps:** Code implementation based on this design
+**Next Steps:** Code implementation based on this design  
+
+**Changes from v1.0.0:**
+- Added `dev_mode` parameter for testing without commits
+- Added `stop_at_offset` parameter for controlled processing
+- Updated commit thread logic to handle dev_mode
+- Updated polling thread logic to handle stop_at_offset
+- Updated shutdown sequence for stop_at_offset trigger
+- Added new runbooks for dev_mode and stop_at_offset scenarios
+- Updated logging to reflect new parameters
