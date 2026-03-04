@@ -1,42 +1,17 @@
-CONTEXT:
-- Most developers are on Windows
-- Developers already have Python installed
-- There is an existing requirements.txt for prod dependencies
-- We want hooks to run automatically on every git commit locally
-- Hook code should NOT affect prod or CI/CD (CI/CD integration is out of scope for now)
+What We're Building
+A sprint-level developer productivity scoring tool that gives every developer a transparent, fair, and consistent score each sprint — based on the same frameworks that Google, Microsoft, Meta, Uber and Spotify use internally.
 
-FILES TO CREATE:
-1. requirements-dev.txt
-   - Add: pre-commit>=3.6.0
+The Three Pillars It's Based On
 
-2. setup_dev.py
-   - Cross-platform Python script (works on Windows/Mac/Linux)
-   - Installs requirements-dev.txt
-   - Runs: pre-commit install
-   - Prints clear success message
+DORA (Google) — "How fast and safely does code get to production?" — drives our delivery and quality metrics
+SPACE (Microsoft Research) — "Productivity is multi-dimensional, never one number" — drives our weighted, balanced scoring approach
+DX Core 4 (Meta, Uber, Spotify) — "Speed means nothing without AI adoption and developer experience" — drives our AI leverage tracking and contribution bonus
 
-3. .pre-commit-config.yaml
-   - Register the two custom hooks below
-   - language: python, types: [python]
 
-4. hooks/check_file_naming.py
-   - [PLACEHOLDER — rules to be defined later]
-   - For now: always passes, prints "file naming check: skipped (rules pending)"
+What We Measure
 
-5. hooks/check_job_structure.py
-   - [PLACEHOLDER — rules to be defined later]
-   - For now: always passes, prints "job structure check: skipped (rules pending)"
-
-6. Update README.md
-   - Add a "Developer Setup" section
-   - Instructions: clone repo → run python setup_dev.py → done
-
-STRUCTURE:
-your-repo/
-├── .pre-commit-config.yaml
-├── requirements.txt          ← do NOT touch, prod only
-├── requirements-dev.txt      ← add pre-commit here
-├── setup_dev.py              ← cross platform one-command setup
-├── hooks/
-│   ├── check_file_naming.py
-│   └── check_job_structure.py
+Delivery — story points completed vs committed, PRs merged, code reviews done
+Quality — bugs post-sprint, rework, failed QA, test coverage
+AI Leverage — how frequently and effectively developers use AI tools
+Activity — commits and lines of code, kept at low weight intentionally to prevent gaming
+Contribution Bonus — manager-approved extra work like POCs, refactoring and CI/CD improvements that never show up in story points today
