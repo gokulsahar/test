@@ -1,36 +1,302 @@
-# Analytics Dashboard → React Migration
+import streamlit as st
+import duckdb
+import pandas as pd
+import os
 
-## Objective
-You are an expert React developer. I am providing you with multiple 
-reference assets from an existing analytics dashboard. Your job is to 
-build a complete, production-ready React application that is a pixel 
-perfect 1:1 recreation of the original dashboard. The final result 
-must be visually and functionally indistinguishable from the original.
+st.set_page_config(
+    page_title="DuckDB Client",
+    page_icon="🦆",
+    layout="wide",
+)
 
-## Assets Provided
-1. dashboard definition file — contains all widget definitions, 
-   queries, layout grid and filter configurations
-2. outerHTML — scraped DOM of the live dashboard with exact labels,
-   axis text, KPI values, layout structure and CSS
-3. static datasets — CSV/JSON data files extracted from the source
-4. screenshots — images of every dashboard state
+# ── Styles ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    /* Dark sidebar */
+    [data-testid="stSidebar"] { background: #111118; }
 
-Analyze ALL assets together before writing a single line of code.
-Cross reference them to resolve any conflicts, always preferring 
-the screenshot as the visual ground truth.
-## Deliverables
+    /* Table header color */
+    thead tr th { background: #1a1a24 !important; color: #f0c040 !important; }
 
-1. Complete runnable React project
-2. README.md with:
-   - Setup and run instructions
-   - Full list of every widget migrated
-   - Notes on any synthetic data used
-   - Steps to connect real data API later
+    /* Compact dataframe */
+    .stDataFrame { border: 1px solid #2a2a3a; border-radius: 6px; }
 
-## Golden Rules
-- Screenshots are the ultimate source of truth for visuals
-- Never use placeholder grey boxes — every widget renders real data
-- Always use human readable labels from outerHTML not raw field names
-- Every filter must actually work, not just look correct
-- The finished dashboard must look like a live production tool
-- When in doubt about any detail, refer back to the screenshots
+    /* Code editor area */
+    .stTextArea textarea {
+        font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+        font-size: 13px !important;
+        background: #0d0d14 !important;
+        color: #e8e8f0 !important;
+        border: 1px solid #2a2a3a !important;
+    }
+
+    /* Success / error chips */
+    .chip-success { background:#0d2a1a; color:#40f0a0; padding:4px 10px;
+                    border-radius:4px; font-size:12px; border:1px solid #40f0a0; }
+    .chip-error   { background:#2a0d0d; color:#f04060; padding:4px 10px;
+                    border-radius:4px; font-size:12px; border:1px solid #f04060; }
+
+    /* Hide Streamlit branding */
+    #MainMenu, footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Session state ─────────────────────────────────────────────────────────────
+if "conn" not in st.session_state:
+    st.session_state.conn = None
+if "db_path" not in st.session_state:
+    st.session_state.db_path = ""
+if "tables" not in st.session_state:
+    st.session_state.tables = []
+if "query_history" not in st.session_state:
+    st.session_state.query_history = []
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def load_database(path: str):
+    """Open a DuckDB file and cache its table list."""
+    if not os.path.exists(path):
+        return False, f"File not found: {path}"
+    try:
+        conn = duckdb.connect(path, read_only=True)
+        tables = conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' ORDER BY table_name"
+        ).fetchdf()["table_name"].tolist()
+        st.session_state.conn = conn
+        st.session_state.tables = tables
+        st.session_state.db_path = path
+        return True, tables
+    except Exception as e:
+        return False, str(e)
+
+
+def get_table_info(table: str) -> pd.DataFrame:
+    """Return column names + types for a table."""
+    return st.session_state.conn.execute(
+        f"PRAGMA table_info('{table}')"
+    ).fetchdf()[["name", "type", "notnull", "dflt_value", "pk"]]
+
+
+def sample_table(table: str, n: int = 100) -> pd.DataFrame:
+    return st.session_state.conn.execute(
+        f'SELECT * FROM "{table}" LIMIT {n}'
+    ).fetchdf()
+
+
+def run_query(sql: str) -> tuple[pd.DataFrame | None, str | None]:
+    try:
+        df = st.session_state.conn.execute(sql).fetchdf()
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
+
+def row_count(table: str) -> int:
+    return st.session_state.conn.execute(
+        f'SELECT COUNT(*) FROM "{table}"'
+    ).fetchone()[0]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("## 🦆 DuckDB Client")
+    st.divider()
+
+    # ── File loader ───────────────────────────────────────────────────────────
+    st.markdown("### 📂 Open Database")
+
+    db_path_input = st.text_input(
+        "File path",
+        value=st.session_state.db_path,
+        placeholder="/path/to/your/file.duckdb",
+        label_visibility="collapsed",
+    )
+
+    col_load, col_close = st.columns([2, 1])
+    with col_load:
+        if st.button("Connect", use_container_width=True, type="primary"):
+            ok, result = load_database(db_path_input.strip())
+            if ok:
+                st.success(f"Loaded {len(result)} table(s)")
+            else:
+                st.error(result)
+    with col_close:
+        if st.button("Close", use_container_width=True):
+            if st.session_state.conn:
+                st.session_state.conn.close()
+            st.session_state.conn = None
+            st.session_state.tables = []
+            st.session_state.db_path = ""
+            st.session_state.query_history = []
+            st.rerun()
+
+    # ── Table list ────────────────────────────────────────────────────────────
+    if st.session_state.tables:
+        st.divider()
+        st.markdown("### 🗂 Tables")
+
+        selected_table = st.radio(
+            "tables",
+            st.session_state.tables,
+            label_visibility="collapsed",
+        )
+
+        st.divider()
+        st.markdown(f"**`{selected_table}`**")
+        try:
+            cnt = row_count(selected_table)
+            st.caption(f"{cnt:,} rows")
+        except:
+            pass
+
+        info_df = get_table_info(selected_table)
+        st.dataframe(info_df, use_container_width=True, hide_index=True)
+    else:
+        selected_table = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN AREA
+# ══════════════════════════════════════════════════════════════════════════════
+if st.session_state.conn is None:
+    # ── Landing ───────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="text-align:center; padding: 80px 0 40px">
+        <div style="font-size:72px">🦆</div>
+        <h1 style="font-size:2.4rem; margin:16px 0 8px">DuckDB Client</h1>
+        <p style="color:#6868a0; font-size:1rem">
+            Enter a <code>.duckdb</code> file path in the sidebar and click <b>Connect</b>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.info("👈 Paste your `.duckdb` file path in the sidebar to get started.", icon="💡")
+
+else:
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    tab_sample, tab_query, tab_history = st.tabs(
+        ["📋 Sample Data", "⚡ SQL Query", "🕑 Query History"]
+    )
+
+    # ── Tab 1: Sample Data ────────────────────────────────────────────────────
+    with tab_sample:
+        if selected_table:
+            col_title, col_n = st.columns([3, 1])
+            with col_title:
+                st.markdown(f"### `{selected_table}`")
+            with col_n:
+                n_rows = st.number_input(
+                    "Rows", min_value=1, max_value=10_000,
+                    value=100, step=50, label_visibility="visible"
+                )
+
+            try:
+                df = sample_table(selected_table, n_rows)
+                st.caption(f"Showing {len(df):,} rows × {len(df.columns)} columns")
+                st.dataframe(df, use_container_width=True, height=520)
+
+                # Download button
+                csv = df.to_csv(index=False).encode()
+                st.download_button(
+                    "⬇ Download as CSV",
+                    csv,
+                    file_name=f"{selected_table}_sample.csv",
+                    mime="text/csv",
+                )
+            except Exception as e:
+                st.error(f"Error reading table: {e}")
+        else:
+            st.info("Select a table from the sidebar.")
+
+    # ── Tab 2: SQL Query ──────────────────────────────────────────────────────
+    with tab_query:
+        st.markdown("### ⚡ Run SQL")
+
+        # Quick-fill helpers
+        if selected_table:
+            col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+            with col_q1:
+                if st.button("SELECT *", use_container_width=True):
+                    st.session_state["_sql"] = f'SELECT * FROM "{selected_table}" LIMIT 100;'
+            with col_q2:
+                if st.button("COUNT", use_container_width=True):
+                    st.session_state["_sql"] = f'SELECT COUNT(*) AS total FROM "{selected_table}";'
+            with col_q3:
+                if st.button("DESCRIBE", use_container_width=True):
+                    st.session_state["_sql"] = f'DESCRIBE "{selected_table}";'
+            with col_q4:
+                if st.button("SHOW TABLES", use_container_width=True):
+                    st.session_state["_sql"] = "SHOW TABLES;"
+
+        default_sql = st.session_state.pop("_sql", f'SELECT * FROM "{selected_table}" LIMIT 100;' if selected_table else "SELECT 42;")
+
+        sql_input = st.text_area(
+            "SQL",
+            value=default_sql,
+            height=140,
+            label_visibility="collapsed",
+            placeholder="Write your SQL here…",
+            key="sql_editor",
+        )
+
+        col_run, col_clear = st.columns([1, 5])
+        with col_run:
+            run_clicked = st.button("▶ Run", type="primary", use_container_width=True)
+
+        if run_clicked and sql_input.strip():
+            with st.spinner("Running…"):
+                result_df, err = run_query(sql_input.strip())
+
+            # Save to history
+            st.session_state.query_history.insert(0, {
+                "sql": sql_input.strip(),
+                "success": err is None,
+                "rows": len(result_df) if result_df is not None else 0,
+                "error": err,
+            })
+
+            if err:
+                st.markdown(f'<span class="chip-error">✗ Error</span>', unsafe_allow_html=True)
+                st.error(err)
+            else:
+                st.markdown(
+                    f'<span class="chip-success">✓ {len(result_df):,} row(s) returned</span>',
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(result_df, use_container_width=True, height=420)
+
+                csv = result_df.to_csv(index=False).encode()
+                st.download_button(
+                    "⬇ Download results as CSV",
+                    csv,
+                    file_name="query_result.csv",
+                    mime="text/csv",
+                )
+
+    # ── Tab 3: History ────────────────────────────────────────────────────────
+    with tab_history:
+        st.markdown("### 🕑 Query History")
+
+        if not st.session_state.query_history:
+            st.info("No queries run yet.")
+        else:
+            if st.button("🗑 Clear history"):
+                st.session_state.query_history = []
+                st.rerun()
+
+            for i, h in enumerate(st.session_state.query_history):
+                status = "✅" if h["success"] else "❌"
+                label = f"{status}  {h['sql'][:80]}{'…' if len(h['sql']) > 80 else ''}"
+                with st.expander(label):
+                    st.code(h["sql"], language="sql")
+                    if h["success"]:
+                        st.caption(f"{h['rows']:,} row(s) returned")
+                    else:
+                        st.error(h["error"])
+                    if st.button("↩ Re-run this query", key=f"rerun_{i}"):
+                        st.session_state["_sql"] = h["sql"]
+                        st.rerun()
