@@ -1,17 +1,10 @@
-What We're Building
-A sprint-level developer productivity scoring tool that gives every developer a transparent, fair, and consistent score each sprint — based on the same frameworks that Google, Microsoft, Meta, Uber and Spotify use internally.
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import QUrl
+import sys
 
-The Three Pillars It's Based On
-
-DORA (Google) — "How fast and safely does code get to production?" — drives our delivery and quality metrics
-SPACE (Microsoft Research) — "Productivity is multi-dimensional, never one number" — drives our weighted, balanced scoring approach
-DX Core 4 (Meta, Uber, Spotify) — "Speed means nothing without AI adoption and developer experience" — drives our AI leverage tracking and contribution bonus
-
-
-What We Measure
-
-Delivery — story points completed vs committed, PRs merged, code reviews done
-Quality — bugs post-sprint, rework, failed QA, test coverage
-AI Leverage — how frequently and effectively developers use AI tools
-Activity — commits and lines of code, kept at low weight intentionally to prevent gaming
-Contribution Bonus — manager-approved extra work like POCs, refactoring and CI/CD improvements that never show up in story points today
+app = QApplication(sys.argv)
+window = QWebEngineView()
+window.load(QUrl("http://google.com"))
+window.show()
+sys.exit(app.exec_())
