@@ -1,10 +1,50 @@
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QUrl
-import sys
+Add the following visualization modes to the code-graph renderer, in 
+addition to the existing Layered call flow and Grouped by class views. 
+Remove the Organic clusters view — replace it with Data Lineage below.
 
-app = QApplication(sys.argv)
-window = QWebEngineView()
-window.load(QUrl("http://google.com"))
-window.show()
-sys.exit(app.exec_())
+1. PIPELINE VIEW
+Render a hybrid horizontal/vertical control-flow diagram:
+- Main pipeline (top-level function calls in the primary control flow) 
+  laid out strictly left-to-right, one node per call, in execution order.
+- For each main-flow node, any function/method IT calls (sub-calls, 
+  helpers, validators) branches DOWNWARD in a vertical stack beneath 
+  that node, nested by call depth (depth 1 directly below, depth 2 
+  indented further down, etc.).
+- Solid arrows for direct calls, dashed arrows for conditional or 
+  exception-path calls (try/except, retries, fallback branches).
+- Loops render as a rounded rectangle "loop box" wrapping the vertical 
+  sub-branch they repeat, labeled with the loop variable/condition.
+- Color-code nodes by inferred stage/responsibility (e.g. input, 
+  processing, output, error-handling) using a consistent palette.
+- Annotate edges with data-shape/type changes where inferable from 
+  type hints or variable names.
+
+2. CONTROL FLOW GRAPH (CFG) VIEW
+One node per basic block (straight-line code, no branches), edges for 
+each possible jump. Diamond nodes for if/else and match/case branches, 
+labeled with the condition. Loop-back edges curve behind the graph and 
+are labeled with the loop condition. Layout top-to-bottom using a 
+layered/Sugiyama algorithm to minimize edge crossings.
+
+3. SEQUENCE / CALL TIMELINE VIEW
+One vertical lifeline per class/module/service. Time flows top-to-bottom. 
+Each call is a horizontal arrow from caller to callee lifeline, labeled 
+with method name and key args. Return values shown as dashed arrows 
+going back. Group concurrent/async calls (gather, threads) with a 
+bracket showing parallel execution.
+
+4. DATA LINEAGE VIEW
+Trace a specific variable/object through the codebase as a horizontal 
+flow of nodes, one per assignment/mutation, labeled with the operation 
+(filter, join, transform, rename, etc.). Branch the flow if the 
+variable is reassigned conditionally; merge branches back with a 
+labeled join node if they reconverge.
+
+5. SWIMLANE VIEW
+Horizontal swimlanes, one per module/thread/task. Execution order flows 
+left-to-right within each lane. Cross-lane arrows show hand-offs 
+between lanes or merge points where multiple lanes converge into one.
+
+All views must accurately preserve control flow and call flow — no 
+layout should reorder or omit actual execution/call relationships for 
+visual convenience. Keep a consistent color legend across all views.
